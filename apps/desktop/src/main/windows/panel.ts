@@ -51,6 +51,31 @@ function clampToDisplay(x: number, y: number, w: number, h: number) {
   };
 }
 
+/** Bottom-right of a display's work area (orb dock position). */
+function bottomRightInWorkArea(
+  workArea: Electron.Rectangle,
+  w: number,
+  h: number,
+) {
+  const x = workArea.x + workArea.width - w - PANEL_MARGIN;
+  const y = workArea.y + workArea.height - h - PANEL_MARGIN;
+  return clampToDisplay(
+    Math.round(x),
+    Math.round(y),
+    w,
+    h,
+  );
+}
+
+/**
+ * First-launch / no-saved-position: main monitor bottom-right, never (0,0).
+ * Without explicit x,y, some Electron versions leave the window at the origin
+ * until the first setPosition, which reads as a ball stuck in the top-left.
+ */
+function initialOrbPosition(w: number, h: number) {
+  return bottomRightInWorkArea(screen.getPrimaryDisplay().workArea, w, h);
+}
+
 export function getPanelWindow(): BrowserWindow | null {
   return panel;
 }
@@ -58,7 +83,11 @@ export function getPanelWindow(): BrowserWindow | null {
 export async function createPanelWindow(): Promise<BrowserWindow> {
   if (panel && !panel.isDestroyed()) return panel;
 
+  const { x: orbX, y: orbY } = initialOrbPosition(ORB_INITIAL_SIZE, ORB_INITIAL_SIZE);
+
   panel = new BrowserWindow({
+    x: orbX,
+    y: orbY,
     width: ORB_INITIAL_SIZE,
     height: ORB_INITIAL_SIZE,
     minWidth: 60,
@@ -119,12 +148,21 @@ export async function createPanelWindow(): Promise<BrowserWindow> {
     panel = null;
   });
 
-  // Restore saved position if we have one.
+  // Restore saved position if we have one. A legacy (0,0) save was written when
+  // the window was never given explicit x,y — treat that as "no real position"
+  // and dock to the main screen bottom-right instead.
   const saved = getSettings().panelPosition;
   if (saved) {
     const [w, h] = panel.getSize();
-    const clamped = clampToDisplay(saved.x, saved.y, w, h);
-    panel.setPosition(clamped.x, clamped.y);
+    const atOrigin = Math.abs(saved.x) < 3 && Math.abs(saved.y) < 3;
+    if (atOrigin) {
+      const p = initialOrbPosition(w, h);
+      panel.setPosition(p.x, p.y);
+      setSettings({ panelPosition: { x: p.x, y: p.y } });
+    } else {
+      const clamped = clampToDisplay(saved.x, saved.y, w, h);
+      panel.setPosition(clamped.x, clamped.y);
+    }
     userRepositioned = true;
   }
 
@@ -142,19 +180,14 @@ function anchorPanelToCursor(win: BrowserWindow, anchor?: { x: number; y: number
   const display = screen.getDisplayNearestPoint(point);
   const [w, h] = win.getSize();
 
-  let x: number;
-  let y: number;
-
-  // Glance docks to the BOTTOM-right of the active display. The window is
-  // transparent and its content floats from the bottom up, so unused pixels
-  // read as invisible.
-  x = display.workArea.x + display.workArea.width - w - PANEL_MARGIN;
-  y = display.workArea.y + display.workArea.height - h - PANEL_MARGIN;
   // `anchor` is kept in the signature for future "follow the cursor" UX but
   // intentionally ignored here to keep the orb in a stable resting spot.
   void anchor;
 
-  win.setPosition(Math.round(x), Math.round(y));
+  // Glance docks to the BOTTOM-right of the display under the cursor. Clamped
+  // so resizes on odd aspect ratios can’t strand the window off-screen.
+  const { x, y } = bottomRightInWorkArea(display.workArea, w, h);
+  win.setPosition(x, y);
 }
 
 export function resizePanelContent(width: number, height: number): void {
