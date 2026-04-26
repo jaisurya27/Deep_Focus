@@ -271,10 +271,14 @@ export function GlanceShell() {
 
       // Decide which image to send to the artifact router.
       // 1. Explicit region capture (Cmd+Ctrl+S) or caller-provided image wins.
-      // 2. Otherwise grab an ambient full-screen snapshot so the model sees
-      //    what's actually on screen. Falls back gracefully on any failure.
+      // 2. Ambient full-screen snapshot ONLY when there is no selected text.
+      //    When the user selects text, that text IS the context — attaching a
+      //    screenshot of the visible webpage confuses the auto-router into
+      //    treating it as a UI/visual question (e.g. UI-Critique) instead of
+      //    explaining the selection. Ambient capture is useful only for the
+      //    "no explicit context, just ask about what's on screen" case.
       let wireImage: string | null = imageUrl;
-      if (!wireImage) {
+      if (!wireImage && !text) {
         try {
           const t0 = performance.now();
           const cap = await window.deepFocus?.capture?.fullscreen?.();
