@@ -169,8 +169,10 @@ export function resizePanelContent(width: number, height: number): void {
     // user's chosen position feels sticky as content changes size.
     const [curX, curY] = panel.getPosition();
     const [curW, curH] = panel.getSize();
-    const nextX = Math.round(curX + (curW - clamped.w));
-    const nextY = Math.round(curY + (curH - clamped.h));
+    const rawX = Math.round(curX + (curW - clamped.w));
+    const rawY = Math.round(curY + (curH - clamped.h));
+    // Clamp so the orb can never be pushed fully off-screen by a resize.
+    const { x: nextX, y: nextY } = clampToDisplay(rawX, rawY, clamped.w, clamped.h);
     panel.setContentSize(clamped.w, clamped.h);
     panel.setPosition(nextX, nextY);
     schedulePositionSave(nextX, nextY);

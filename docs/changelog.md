@@ -4,6 +4,121 @@ Chronological record of changes on top of the `Refactor: Deep Focus → Glance`
 commit (110830b). When the branch ships, squash or re-organize into a proper
 changelog.
 
+## 2026-04-25 — Image-only capture auto-submit
+
+Region captures (Cmd+Ctrl+S) now auto-submit to `/artifact` immediately after
+the selection is made — no text input required. The backend vision router
+analyzes the image and returns the most relevant artifact (recipe, food order,
+identify, explain chart, etc.) without the user needing to type anything.
+
+**What changed:**
+- `GlanceShell.tsx` — added `runAutoRef` (always-fresh ref to `runAuto`) so the
+  `panel.onOpen` IPC handler can call it without stale-closure issues. On
+  `mode === "region"` with an `imageDataUrl`, `runAuto("")` is now scheduled via
+  `setTimeout(0)` immediately after the pending image is set.
+- `GlanceShell.tsx` — composer `onSend` now allows submitting with an empty draft
+  when `pendingImage` is set (belt-and-suspenders for the rare case where the
+  user beats the auto-submit).
+- `router.py` — heuristic fallback for image-only requests now uses app/window
+  context to make smarter pre-LLM picks: food apps → `food_order`, product
+  retailers → `product`, code editors → `explain_code`, chart titles →
+  `explain_chart` (applies only in mock mode; live providers still use the
+  vision LLM router).
+
+**Files changed:**
+- `apps/desktop/src/renderer/shell/GlanceShell.tsx`
+- `services/backend/app/router.py`
+
+## 2026-04-25 — 9 new bespoke artifact types (maps, shopping, food+order, weather, restaurant booking, flight tracker, email compose, job apply, grocery list)
+
+Added a full second wave of artifact kinds — each with a custom backend schema,
+mock data for offline demo, TypeScript type, and a purpose-built React card.
+
+**New artifact kinds:**
+
+| Kind | Category | Card highlights |
+|---|---|---|
+| `map` | Discover | CSS grid map art with location pin, Google Maps + Apple Maps + Directions links |
+| `shopping` | Discover | Per-retailer rows (Amazon/Walmart/Best Buy) with price, View, and Add-to-Cart buttons |
+| `food_order` | Discover | Tab card: "Order" tab lists DoorDash / Uber Eats / Grubhub deep-links; "Recipe" tab shows ingredients + steps |
+| `weather` | Discover | Current temp + condition hero, feels-like/humidity/wind stats row, 5-day forecast strip with weather emoji |
+| `restaurant_booking` | Connect | Star rating, price level, hours, and a prominent "Book on OpenTable" CTA |
+| `flight_track` | Connect | Route + price display, trend indicator (↑/↓/→), Google Flights + Kayak + price-alert links |
+| `email_compose` | Connect | Email header (To/Subject) + body pre-filled and editable, "Open Gmail" and "Outlook" deeplinks |
+| `job_apply` | Connect | Company, role, salary badge, skill pills, requirements list, "Apply Now →" and "LinkedIn" CTAs |
+| `grocery_list` | Connect | Per-category checkable item list (state preserved in card), Instacart + Walmart Grocery order links |
+
+**Files changed:**
+- `services/backend/app/artifacts.py` — 9 new `ActionSpec` entries, updated suggested-action catalog string in `_json_contract`
+- `apps/desktop/src/shared/artifacts.ts` — 9 new TS types + updated `Artifact` union
+- `apps/desktop/src/renderer/artifacts/ArtifactCard.tsx` — 9 new card components, switch cases, and imports
+
+## 2026-04-25 — smart context loop: auto-screenshot when the model needs to see the screen
+
+"What am I looking at?" used to stump Glance: with no image attached, the
+artifact router picked `answer` and the model confessed it couldn't see
+the screen. Fixed by wiring a two-sided **smart-context loop** that can
+auto-collect whatever signal the agent decides it's missing.
+
+**Backend** — `services/backend/app/`:
+
+- New meta-action `needs_context` in `artifacts.py`. Router-only (never
+  user-facing). The `/artifact` route *short-circuits* for it — no LLM
+  call, just a deterministic JSON payload:
+  `{kind:"needs_context", needs:["screenshot"], reason, retry_instruction}`.
+- `router.py` now teaches the LLM to pick `needs_context` when the user
+  is clearly asking about on-screen content but nothing visual is
+  attached, and the heuristic fallback does the same via a
+  `_VISUAL_INTENT_RE` regex ("what am I looking at", "describe my
+  screen", "read this for me", etc.). The action is filtered out of the
+  catalog once an image is already attached so the router can't loop.
+
+**Main process** — `apps/desktop/src/main/capture/fullscreen.ts`:
+
+- `captureFullScreen()` silently snaps the display under the cursor via
+  `desktopCapturer` (no overlay UI). Temporarily hides the panel for
+  ~60 ms so the orb/composer don't appear inside the screenshot, then
+  restores it. Returns a downscaled (max edge 1600 px) data URL.
+- Bubbles a structured error envelope instead of throwing so the
+  renderer can distinguish `permission` vs `failed`.
+- Exposed via `ipcMain.handle(IPC.CAPTURE_FULLSCREEN)` and the preload
+  bridge as `window.deepFocus.capture.fullscreen()`.
+
+**Renderer** — `apps/desktop/src/renderer/shell/GlanceShell.tsx`:
+
+- Fast path: before every composer submission, a `VISUAL_INTENT_RE`
+  regex (kept in sync with the backend) auto-captures a screenshot when
+  the prompt clearly asks about the screen and nothing visual is
+  attached yet. Saves a round-trip for the common case.
+- Slow path: after any `runArtifact` response, if the artifact kind is
+  `needs_context`, the shell silently fulfills the declared needs
+  (currently `screenshot`; `selection` / `active_window` are reserved
+  for future hooks), drops the placeholder turn from the transcript,
+  and re-runs the original instruction with the new signal attached.
+- Retries are capped at depth 1 so a misbehaving model can't spin
+  forever. If the capture fails (permission denied), we surface the
+  notice banner with a deep link to System Settings and render a new
+  `NeedsContextCard` (in `ArtifactCard.tsx`) so the user still sees
+  *why* we're stuck.
+- Store gains a small `removeMessages([ids])` action for surgically
+  replacing the placeholder user/assistant pair when auto-fulfilling.
+
+Shape of a `needs_context` artifact (shared type in
+`apps/desktop/src/shared/artifacts.ts`):
+
+```
+{
+  "kind": "needs_context",
+  "needs": ["screenshot" | "selection" | "active_window", …],
+  "reason": "one-sentence why",
+  "retry_instruction": "original user question, preserved"
+}
+```
+
+Extending the loop to new signals is a two-sided change only: add the
+signal id to `needs`, teach the renderer how to collect it, and (if it's
+genuinely new) add a capture helper in the main process.
+
 ## 2026-04-25 — `/artifact` replays session history on follow-ups
 
 Follow-up questions through the composer were reading as cold-start asks:
@@ -33,6 +148,23 @@ Fix in `services/backend/app/routes/artifact.py`:
 "Lazy context" in `CLAUDE.md` means *decide smartly whether to reuse the
 last session or start fresh on a new capture* — it does NOT mean drop
 all memory mid-session.
+
+## 2026-04-25 — keep the user's request visible while streaming
+
+Previously `runAuto`/`runAction` cleared `draft` immediately on submit,
+so during streaming the composer showed the generic `Thinking…`
+placeholder and the user lost sight of what they actually asked. Now:
+
+- Composer keeps the submitted text in the (disabled) textarea while
+  the turn streams, wrapped in the Siri-style glow — so the prompt
+  itself *is* the loading surface.
+- `runAction` (chip clicks / smart crumbs / suggestions) has no typed
+  draft, so we inject a pretty version of the action label into the
+  composer (e.g. "Explain code") during its stream for the same reason.
+- The "clear text" X is hidden while streaming so the request can't be
+  wiped mid-flight — the Stop button is the only way to cancel.
+- `draft` is cleared in the `finally` of both flows so success, error,
+  and abort all end on a clean composer ready for the next ask.
 
 ## 2026-04-25 — kill layout-animation overlap ("rectangle below chat")
 

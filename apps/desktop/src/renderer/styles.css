@@ -185,8 +185,8 @@ body { background: transparent !important; }
    (the Electron window is transparent but its box DOES clip box-shadow). */
 .orb {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 52px;
+  height: 52px;
   border-radius: 9999px;
   background:
     radial-gradient(circle at 30% 30%, #34d399 0%, #10b981 55%, #047857 100%);

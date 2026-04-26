@@ -21,6 +21,7 @@ names and payload shapes live in `apps/desktop/src/shared/ipc.ts`.
 | `IPC.OPEN_HISTORY` / `IPC.OPEN_SETTINGS` | renderer → main | — | Open the respective windows. |
 | `IPC.OPEN_EXTERNAL` | renderer → main | `href: string` | Open a URL via Electron's `shell.openExternal`. Main allowlists `http://`, `https://`, and `x-apple.systempreferences:` — anything else is dropped. Used by `NoticeBanner`'s action button (e.g. deep-link to the Screen-Recording pane in System Settings). |
 | `IPC.CAPTURE_OVERLAY_CANCEL` | renderer → main | `reason?: string` | Sent when the capture overlay bails (Esc, too-small, pointer-cancel). `reason` is logged by main to diagnose future regressions. |
+| `IPC.CAPTURE_FULLSCREEN` | renderer → main (invoke) | — | Silently snaps the display under the cursor (no overlay UI). Main temporarily hides the panel window so the orb/composer don't appear inside the shot, then restores it. Returns `{ok:true, value:{dataUrl,width,height}}` or `{ok:false, error:{kind:"permission"\|"no-sources"\|"failed", …}}`. Used by the smart-context auto-fulfill loop — see `docs/changelog.md` 2026-04-25 entry. |
 
 ### `PanelOpenPayload.notice`
 
@@ -52,7 +53,8 @@ window.deepFocus = {
   context: {
     getActiveWindow(), getSelection(),
   },
-  capture: { startRegion() },
+  capture: { startRegion(), fullscreen() },     // fullscreen() silently snaps the display under the cursor
+
   overlay: { complete(rect), cancel(reason?) },
   shell: { openExternal(href) },              // goes through OPEN_EXTERNAL allowlist
   settings: { get(), set(partial) },

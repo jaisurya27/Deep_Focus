@@ -35,6 +35,10 @@ def _catalog_for_prompt(*, has_image: bool) -> list[dict]:
     """
     out: list[dict] = []
     for spec in ACTIONS.values():
+        # `needs_context` is the "please capture a screenshot first" escape
+        # hatch — only a legal router pick when nothing visual is attached.
+        if spec.id == "needs_context" and has_image:
+            continue
         if spec.needs_image and not has_image:
             continue
         out.append(
@@ -75,10 +79,16 @@ def _router_system_prompt(catalog: list[dict]) -> str:
         "2. SELECTED TEXT IS PRIMARY CONTEXT. When captured text is present "
         "   alongside an image, the text is what the user highlighted — treat "
         "   it as the main subject. The image is ambient background context.\n"
-        "3. IMAGE-ONLY SPECIALISATION. Only pick a visual action (critique_ui, "
-        "   explain_chart, identify, recipe, diagram_to_mermaid) when there is "
-        "   NO captured text AND NO explicit instruction that points elsewhere.\n"
-        "4. FALLBACK. If nothing specialized fits, pick `answer`.\n"
+        "3. If the user is clearly asking about what's visible on their screen "
+        "   (e.g. 'what am I looking at', 'describe my screen', 'read this for me') "
+        "   AND no image is attached, pick `needs_context` so the client can "
+        "   capture a screenshot and retry.\n"
+        "4. IMAGE-ONLY SPECIALISATION. Only pick a strong visual action "
+        "   (critique_ui, explain_chart, identify, recipe, diagram_to_mermaid) "
+        "   when there is NO captured text AND no conflicting instruction. "
+        "   Be decisive when the visual signal is strong and nothing else "
+        "   competes (code, error, chart, product photo, etc.).\n"
+        "5. FALLBACK. If nothing specialized fits, pick `answer`.\n"
         "- `alternatives` should list up to 2 other plausible actions.\n\n"
         "Respond with a SINGLE JSON object, no prose, no fences, shape:\n"
         '{"action":"<id>","alternatives":[{"id":"<id>","reason":"…"}],"reason":"<1 sentence>"}'
@@ -211,6 +221,23 @@ _NON_ENGLISH_RE = re.compile(
 _CODEY_APPS = re.compile(
     r"code|xcode|terminal|iterm|intellij|pycharm|webstorm|vim|nvim|sublime", re.I
 )
+# "what am I looking at", "describe my screen", "read this", "what's on the
+# screen right now" — user is clearly asking about visible content but we
+# don't have an image yet. The router emits `needs_context` so the client
+# auto-captures a screenshot and retries.
+_VISUAL_INTENT_RE = re.compile(
+    r"\b("
+    r"what\s+am\s+i\s+(looking|seeing|viewing)\s+at|"
+    r"what'?s?\s+(on|in)\s+(my|the)\s+screen|"
+    r"describe\s+(my|the|this)\s+(screen|window|page|tab|app)|"
+    r"read\s+(my|the|this)\s+(screen|window)|"
+    r"what\s+is\s+(this|that)\s+(showing|on\s+(my|the)\s+screen)|"
+    r"summarize\s+(my|the|this)\s+(screen|window|page|tab)|"
+    r"explain\s+(my|the|this)\s+(screen|window|page)|"
+    r"help\s+me\s+with\s+(this|what'?s\s+on)"
+    r")\b",
+    re.I,
+)
 
 
 def _heuristic_route(
@@ -235,6 +262,16 @@ def _heuristic_route(
             ][:2],
             "reason": reason,
         }
+
+    # If the user is asking about what's visible but we don't have any
+    # image context yet, signal the client to capture a screenshot and
+    # retry. The frontend auto-fulfills this and re-runs the same turn.
+    if not has_image and _VISUAL_INTENT_RE.search(instr):
+        return pick(
+            "needs_context",
+            ["answer"],
+            "Asking about the screen — need a screenshot to answer.",
+        )
 
     # Explicit user instruction wins.
     if "translate" in instr:
@@ -265,9 +302,29 @@ def _heuristic_route(
             return pick("answer", ["rewrite", "translate"], "Long passage — summarize/prose.")
 
     # Image-only specialisation: only when there is no text body and no
-    # instruction that points at a text action. If there IS text or an
-    # explicit generic instruction (like "elaborate"), fall through to answer.
+    # instruction. If there IS text (or "elaborate", etc.), fall through to answer.
     if has_image and not body and not instr:
+        # Heuristic fast path (mock / before vision model): use window title+app
+        # to nudge food vs shopping vs code vs chart vs generic identify.
+        app_lc = ((window_context or {}).get("appName") or "").lower()
+        title_lc = ((window_context or {}).get("title") or "").lower()
+        _FOOD_APPS = re.compile(r"doordash|ubereats|uber\s*eats|grubhub|yelp|opentable|zomato|instacart", re.I)
+        _FOOD_TITLE = re.compile(
+            r"\b(recipe|restaurant|menu|food|eat|cook|dish|meal|dinner|lunch|breakfast|cafe|pizza|sushi|burger|ramen)\b",
+            re.I,
+        )
+        _PRODUCT_APPS = re.compile(r"amazon|walmart|shopify|ebay|etsy|bestbuy|target", re.I)
+        _CODE_APPS_RE = re.compile(r"code|xcode|terminal|iterm|intellij|pycharm|webstorm|vim|nvim|sublime", re.I)
+        _CHART_TITLE = re.compile(r"\b(chart|graph|analytics|dashboard|stats|metrics|data)\b", re.I)
+
+        if _FOOD_APPS.search(app_lc) or _FOOD_TITLE.search(title_lc):
+            return pick("food_order", ["recipe", "restaurant_booking"], "Food context detected.")
+        if _PRODUCT_APPS.search(app_lc):
+            return pick("product", ["shopping"], "Shopping context detected.")
+        if _CODE_APPS_RE.search(app_lc):
+            return pick("explain_code", ["fix_code", "diagnose_error"], "Code editor detected.")
+        if _CHART_TITLE.search(title_lc):
+            return pick("explain_chart", ["answer"], "Chart/data context detected.")
         return pick("identify", ["critique_ui", "explain_chart"], "Image-only context.")
 
     return pick("answer", [], "Fallback — free-form answer.")

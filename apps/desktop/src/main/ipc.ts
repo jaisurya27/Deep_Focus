@@ -1,8 +1,8 @@
 import { app, ipcMain, safeStorage, shell } from "electron";
 
 import { IPC, type Settings } from "../shared/ipc";
-import { getActiveWindowContext } from "./context/active-window";
 import { captureFullScreen } from "./capture/fullscreen";
+import { getActiveWindowContext } from "./context/active-window";
 import { getSettings, setSettings, getSecret, setSecret } from "./settings";
 import { registerHotkeys } from "./hotkeys";
 import { openHistoryWindow } from "./windows/history";

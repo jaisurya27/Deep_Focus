@@ -135,6 +135,12 @@ export function GlanceShell() {
             savedPath: payload.imagePath ?? null,
           });
           shouldExpand = true;
+          // Auto-submit the capture immediately — no text required. The
+          // backend router will pick the best artifact (recipe, identify,
+          // food_order, explain_chart, etc.) from the image alone. Schedule
+          // via setTimeout(0) so React's batched state updates (setExpanded,
+          // etc.) settle first and runAutoRef.current is fresh.
+          setTimeout(() => void runAutoRef.current(""), 0);
         }
         store.setPendingSelection(null);
       } else if (payload.mode === "just-ask") {
@@ -230,24 +236,64 @@ export function GlanceShell() {
   const runAuto = useCallback(
     async (
       instruction: string,
-      opts?: { preferText?: string | null; preferImageDataUrl?: string | null },
+      opts?: {
+        preferText?: string | null;
+        preferImageDataUrl?: string | null;
+        /**
+         * Internal counter to cap smart-context retries. Public callers
+         * should never pass this — it's bumped when we auto-fulfill a
+         * `needs_context` artifact and re-enter runAuto.
+         */
+        _retryDepth?: number;
+      },
     ) => {
       if (isStreaming) return;
       const store = useSession.getState();
       const selection = store.pendingSelection;
       const image = store.pendingImage;
-      const imageUrl = opts?.preferImageDataUrl ?? image?.dataUrl ?? null;
+      let imageUrl = opts?.preferImageDataUrl ?? image?.dataUrl ?? null;
       const text = opts?.preferText ?? selection?.text ?? null;
       const trimmedInstr = instruction.trim();
       if (!trimmedInstr && !text && !imageUrl) return;
 
+      // Fast path for obviously-visual prompts. If the user is asking about
+      // their screen and we have nothing visual attached yet, snap a
+      // screenshot BEFORE we ship the turn — saves the extra round-trip
+      // through the backend's `needs_context` response and makes the very
+      // first "what am I looking at?" feel instant.
+      if (!imageUrl && looksLikeVisualIntent(trimmedInstr)) {
+        const snap = await window.deepFocus?.capture?.fullscreen?.();
+        if (snap && snap.ok) {
+          imageUrl = snap.value.dataUrl;
+          store.setPendingImage({
+            dataUrl: snap.value.dataUrl,
+            width: snap.value.width,
+            height: snap.value.height,
+            savedPath: null,
+          });
+        } else if (snap && !snap.ok && snap.error.kind === "permission") {
+          setPanelNotice({
+            tone: "warn",
+            title: "Screen Recording permission needed",
+            body: "Grant access in System Settings → Privacy & Security → Screen & System Audio Recording to let Glance answer questions about your screen.",
+            action: {
+              label: "Open System Settings",
+              href: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            },
+          });
+        }
+      }
+
+      // `image` above is a snapshot — re-read after the fast-path
+      // auto-capture so the message carries the freshly grabbed frame.
+      const imageForMsg = useSession.getState().pendingImage ?? image;
       const userMsg: ChatMessage = {
         id: makeMessageId(),
         role: "user",
         content: trimmedInstr || (text ? text.slice(0, 160) : "(image context)"),
         source: store.mode,
         selection: selection ?? null,
-        image: image ?? null,
+        image: imageForMsg ?? null,
       };
       const assistantMsg: ChatMessage = {
         id: makeMessageId(),
@@ -260,7 +306,12 @@ export function GlanceShell() {
       store.appendMessage(userMsg);
       store.appendMessage(assistantMsg);
       store.setStreaming(true);
-      setDraft("");
+      // Keep the user's request visible in the composer (disabled) while the
+      // turn streams so they can see what we're working on. Cleared in the
+      // `finally` below once the response lands (or the turn errors/aborts).
+      if (!draft.trim() && trimmedInstr) {
+        setDraft(trimmedInstr);
+      }
       store.setPendingSelection(null);
       store.setPendingImage(null);
       setLastRouting(null);
@@ -283,10 +334,10 @@ export function GlanceShell() {
           const t0 = performance.now();
           const cap = await window.deepFocus?.capture?.fullscreen?.();
           const ms = Math.round(performance.now() - t0);
-          if (cap?.dataUrl) {
-            wireImage = cap.dataUrl;
+          if (cap?.ok && cap.value?.dataUrl) {
+            wireImage = cap.value.dataUrl;
             console.info(
-              `[chat] ambient full-screen capture attached (${cap.width}×${cap.height}, ${ms}ms)`,
+              `[chat] ambient full-screen capture attached (${cap.value.width}×${cap.value.height}, ${ms}ms)`,
             );
           } else {
             console.info(`[chat] ambient capture unavailable (${ms}ms) — no image context`);
@@ -318,6 +369,67 @@ export function GlanceShell() {
             });
           },
         });
+        // Smart-context auto-fulfill: if the backend tells us it needs a
+        // screenshot (or other signal) to actually answer, capture it
+        // silently and re-run the same instruction. We cap the retry
+        // depth so a misbehaving model can't spin forever.
+        const retryDepth = opts?._retryDepth ?? 0;
+        const artifact = res.artifact as unknown as {
+          kind?: string;
+          needs?: string[];
+          retry_instruction?: string | null;
+          reason?: string;
+        };
+        if (
+          artifact?.kind === "needs_context" &&
+          retryDepth < 1 &&
+          Array.isArray(artifact.needs) &&
+          artifact.needs.length > 0
+        ) {
+          const needs = new Set(artifact.needs);
+          let nextImageUrl: string | null = imageUrl;
+          if (needs.has("screenshot") && !nextImageUrl) {
+            const snap = await window.deepFocus?.capture?.fullscreen?.();
+            if (snap && snap.ok) {
+              nextImageUrl = snap.value.dataUrl;
+              useSession.getState().setPendingImage({
+                dataUrl: snap.value.dataUrl,
+                width: snap.value.width,
+                height: snap.value.height,
+                savedPath: null,
+              });
+            } else if (snap && !snap.ok && snap.error.kind === "permission") {
+              setPanelNotice({
+                tone: "warn",
+                title: "Screen Recording permission needed",
+                body: "Grant access in System Settings → Privacy & Security → Screen & System Audio Recording and try again.",
+                action: {
+                  label: "Open System Settings",
+                  href: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                },
+              });
+            }
+          }
+          if (nextImageUrl) {
+            // Drop the placeholder turn we just pushed — the retry will
+            // add its own pair. Keeps the transcript readable.
+            useSession.getState().removeMessages([userMsg.id, assistantMsg.id]);
+            useSession.getState().setStreaming(false);
+            abortRef.current = null;
+            const retryInstruction =
+              (artifact.retry_instruction ?? trimmedInstr) || trimmedInstr;
+            await runAuto(retryInstruction, {
+              preferText: text,
+              preferImageDataUrl: nextImageUrl,
+              _retryDepth: retryDepth + 1,
+            });
+            return;
+          }
+          // Couldn't fulfill (permission denied, capture failed) — fall
+          // through and render the needs_context artifact as-is so the
+          // user at least sees *why* we're stuck.
+        }
+
         useSession.getState().updateMessage(assistantMsg.id, {
           streaming: false,
           artifact: res.artifact,
@@ -346,13 +458,19 @@ export function GlanceShell() {
         useSession.getState().setStreaming(false);
         abortRef.current = null;
         setArtifactProgress(0);
+        setDraft("");
       }
     },
-    [isStreaming],
+    [isStreaming, draft],
   );
 
   // Back-compat shim: any legacy caller that used sendText stays working.
   const sendText = runAuto;
+
+  // Always-fresh ref so event-loop callbacks (e.g. the panel.onOpen IPC
+  // handler with [] deps) can call the latest runAuto without stale closures.
+  const runAutoRef = useRef(runAuto);
+  runAutoRef.current = runAuto;
 
   // --- Run an explicit artifact action (chip click / suggestion) ----
 
@@ -420,6 +538,9 @@ export function GlanceShell() {
       store.setStreaming(true);
       store.setPendingSelection(null);
       store.setPendingImage(null);
+      // Action chips have no typed draft; surface the action label in the
+      // composer so the user sees what's being worked on during streaming.
+      setDraft(prettyActionId(action.label ?? action.id));
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -467,6 +588,7 @@ export function GlanceShell() {
         useSession.getState().setStreaming(false);
         abortRef.current = null;
         setArtifactProgress(0);
+        setDraft("");
       }
     },
     [isStreaming],
@@ -670,10 +792,14 @@ export function GlanceShell() {
               streaming={isStreaming}
               onSend={() => {
                 const text = draft.trim();
+                const hasPendingImage = !!useSession.getState().pendingImage;
                 if (text) {
                   void sendText(text);
+                } else if (hasPendingImage) {
+                  // Region capture: allow empty send (re-submit / auto flows).
+                  void sendText(text);
                 } else if (hasContext) {
-                  // Blank Enter with context attached → default to "Explain this".
+                  // Text selection, blank Enter → default to "Explain this".
                   void sendText("Explain this");
                 }
               }}
@@ -996,6 +1122,19 @@ function FloatingAnswer({
   );
 }
 
+// Heuristic: does this prompt read as "please look at my screen"? Kept in
+// sync with the backend's `_VISUAL_INTENT_RE` so the fast path (capture
+// BEFORE shipping the turn) and the post-hoc path (backend returns
+// `needs_context`) agree on what counts as a visual question.
+const VISUAL_INTENT_RE =
+  /\b(what\s+am\s+i\s+(looking|seeing|viewing)\s+at|what'?s?\s+(on|in)\s+(my|the)\s+screen|describe\s+(my|the|this)\s+(screen|window|page|tab|app)|read\s+(my|the|this)\s+(screen|window)|what\s+is\s+(this|that)\s+(showing|on\s+(my|the)\s+screen)|summarize\s+(my|the|this)\s+(screen|window|page|tab)|explain\s+(my|the|this)\s+(screen|window|page)|help\s+me\s+with\s+(this|what'?s\s+on))\b/i;
+
+function looksLikeVisualIntent(instruction: string): boolean {
+  const s = instruction.trim();
+  if (!s) return false;
+  return VISUAL_INTENT_RE.test(s);
+}
+
 // Turn raw backend/fetch errors into something a human wants to read. Keeps
 // the original detail if we can't recognize it so debugging stays possible.
 function humanizeBackendError(raw: string): string {
@@ -1270,7 +1409,7 @@ const FloatingComposer = forwardRef<HTMLTextAreaElement, ComposerProps>(
     ref,
   ) {
     const hasDraft = !!value.trim();
-    const showClear = hasDraft || hasOutput;
+    const showClear = !streaming && (hasDraft || hasOutput);
 
     return (
       <div
