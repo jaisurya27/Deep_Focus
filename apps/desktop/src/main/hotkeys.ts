@@ -36,8 +36,8 @@ export function registerHotkeys() {
         mode: "just-ask",
         selectionText: null,
         windowContext: null,
-        // Pass a flag the renderer can show as a banner.
         sourceApp: "__needs_accessibility__",
+        explicit: true,
       });
       return;
     }
@@ -73,9 +73,10 @@ export function registerHotkeys() {
         selectionText: selection,
         windowContext,
         sourceApp: windowContext?.appName ?? null,
+        explicit: true,
       });
     } else {
-      showPanel({ mode: "just-ask", windowContext });
+      showPanel({ mode: "just-ask", windowContext, explicit: true });
     }
   });
 
@@ -83,11 +84,11 @@ export function registerHotkeys() {
     console.info("[hotkeys] togglePanel handler entered");
     const panel = getPanelWindow();
     if (!panel) {
-      showPanel({ mode: "just-ask" });
+      showPanel({ mode: "just-ask", explicit: true });
       return;
     }
     if (panel.isVisible()) panel.hide();
-    else showPanel({ mode: "just-ask" });
+    else showPanel({ mode: "just-ask", explicit: true });
   });
 
   register(hotkeys.regionCapture, async () => {

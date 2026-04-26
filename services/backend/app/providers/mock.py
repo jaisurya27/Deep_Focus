@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from typing import AsyncIterator
 
 from .base import ChatMessage, GeneratedImage, VisionMessage
@@ -30,6 +31,14 @@ class MockProvider:
         async for tok in _word_stream(reply):
             yield tok
 
+    async def chat_stream_json(
+        self, messages: list[ChatMessage]
+    ) -> AsyncIterator[str]:
+        # Emit a plausible JSON shape in word-by-word chunks so the streaming
+        # plumbing exercises the same path whether or not an API key is set.
+        async for tok in _word_stream(_mock_json_from_messages(messages)):
+            yield tok
+
 
 class MockVisionProvider:
     name = "mock"
@@ -44,6 +53,12 @@ class MockVisionProvider:
             "`services/backend/.env` to enable real image understanding."
         )
         async for tok in _word_stream(reply):
+            yield tok
+
+    async def chat_stream_multimodal_json(
+        self, messages: list[VisionMessage]
+    ) -> AsyncIterator[str]:
+        async for tok in _word_stream(_mock_json_from_messages(messages)):
             yield tok
 
 
@@ -74,6 +89,19 @@ def _last_user_text(messages: list) -> str:
                     return str(part.get("text", ""))
         return ""
     return "(no user message)"
+
+
+def _mock_json_from_messages(messages: list) -> str:
+    """A tiny placeholder JSON blob. The route layer replaces this with a
+    proper per-action mock artifact when it detects the mock provider, but
+    we still need *something* parseable streamed across the wire."""
+    user = _last_user_text(messages) or ""
+    payload = {
+        "kind": "generic",
+        "text": user[:160],
+        "notes": ["Mock mode — replace with real artifact on the server."],
+    }
+    return json.dumps(payload)
 
 
 async def _word_stream(text: str):

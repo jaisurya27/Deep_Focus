@@ -2,7 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 
 import "./styles.css";
-import { AnswerPanel } from "./panels/AnswerPanel";
+import { GlanceShell } from "./shell/GlanceShell";
 
 const container = document.getElementById("root");
 if (!container) {
@@ -11,6 +11,6 @@ if (!container) {
 
 createRoot(container).render(
   <React.StrictMode>
-    <AnswerPanel />
+    <GlanceShell />
   </React.StrictMode>,
 );

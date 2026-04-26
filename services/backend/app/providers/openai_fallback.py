@@ -28,6 +28,18 @@ class OpenAIProvider:
         ):
             yield chunk
 
+    async def chat_stream_json(
+        self, messages: list[ChatMessage]
+    ) -> AsyncIterator[str]:
+        async for chunk in stream_openai_compatible_chat(
+            base_url=self._base_url,
+            api_key=self._api_key,
+            model=self.model,
+            messages=messages,
+            extra_payload={"response_format": {"type": "json_object"}},
+        ):
+            yield chunk
+
 
 class OpenAIVisionProvider:
     name = "openai"
@@ -45,6 +57,18 @@ class OpenAIVisionProvider:
             api_key=self._api_key,
             model=self.model,
             messages=messages,
+        ):
+            yield chunk
+
+    async def chat_stream_multimodal_json(
+        self, messages: list[VisionMessage]
+    ) -> AsyncIterator[str]:
+        async for chunk in stream_openai_compatible_chat(
+            base_url=self._base_url,
+            api_key=self._api_key,
+            model=self.model,
+            messages=messages,
+            extra_payload={"response_format": {"type": "json_object"}},
         ):
             yield chunk
 

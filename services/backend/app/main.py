@@ -13,6 +13,7 @@ from app.providers import (
     get_image_provider,
     get_vision_provider,
 )
+from app.routes.artifact import router as artifact_router
 from app.routes.chat import router as chat_router
 from app.routes.image import router as image_router
 from app.routes.session import router as session_router
@@ -40,6 +41,7 @@ app.include_router(chat_router)
 app.include_router(vision_router)
 app.include_router(image_router)
 app.include_router(session_router)
+app.include_router(artifact_router)
 
 
 def _safe_probe(resolver):
