@@ -42,7 +42,14 @@ def _json_contract(shape_doc: str) -> str:
         f"{shape_doc}\n"
         "If a field does not apply, use null or an empty array. Keep strings "
         "tight — bullets ≤ 140 chars. Never invent facts; say so in a `notes` "
-        "array if you're uncertain."
+        "array if you're uncertain.\n\n"
+        "If the captured content is a MUCH better fit for a different action "
+        "from this catalog — translate, solve_math, explain_code, fix_code, "
+        "diagnose_error, explain_chart, critique_ui, identify, rewrite, "
+        "tasks_to_calendar, draft_reply, diagram_to_mermaid, recipe, product, "
+        "media_lookup, travel, answer — ALSO include at the top level:\n"
+        '"suggested_action": {"id": "<action id>", "reason": "one short sentence"}\n'
+        "Only include it when the mismatch is obvious; otherwise omit the field."
     )
 
 
@@ -50,6 +57,31 @@ def _json_contract(shape_doc: str) -> str:
 
 
 ACTIONS: dict[str, ActionSpec] = {
+    # --- Conversational fallback -----------------------------------------
+    "answer": ActionSpec(
+        id="answer",
+        category="understand",
+        label="Answer",
+        blurb="A free-form markdown answer when no specialized artifact fits.",
+        needs_text=False,
+        system_prompt=_json_contract(
+            """{
+  "kind": "answer",
+  "title": "short title (≤ 6 words) — optional",
+  "body": "markdown answer — use headings/bullets/code as appropriate",
+  "followups": ["optional follow-up question the user might ask"]
+}"""
+        ),
+        mock=lambda t: {
+            "kind": "answer",
+            "title": "Mock answer",
+            "body": (
+                "**Mock mode — no API key.**\n\nHere's a placeholder answer to: "
+                + (t or "(nothing)")
+            ),
+            "followups": ["Tell me more.", "Summarize in one line."],
+        },
+    ),
     # --- Understand -------------------------------------------------------
     "translate": ActionSpec(
         id="translate",

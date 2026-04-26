@@ -155,6 +155,29 @@ export type TravelArtifact = {
   map_query?: string;
 };
 
+export type AnswerArtifact = {
+  kind: "answer";
+  title?: string;
+  body?: string;
+  followups?: string[];
+};
+
+// Optional fields every artifact kind may carry when the agent wants to
+// suggest a different artifact type for the same context.
+export type SuggestedAction = {
+  id: string;
+  label?: string;
+  reason?: string;
+};
+
+export type ArtifactMeta = {
+  provider: string;
+  model: string;
+  session_id: string;
+  routed_action?: string | null;
+  routed_reason?: string | null;
+};
+
 export type GenericArtifact = {
   kind: "generic" | string;
   action?: string;
@@ -163,7 +186,15 @@ export type GenericArtifact = {
   [key: string]: unknown;
 };
 
-export type Artifact =
+// Every concrete artifact may carry these suggestion hooks — the renderer
+// reads them on the raw object rather than requiring each union member to
+// redeclare them.
+type WithSuggestions = {
+  suggested_action?: SuggestedAction;
+  suggested_alternatives?: SuggestedAction[];
+};
+
+export type Artifact = (
   | TranslateArtifact
   | SolveMathArtifact
   | ExplainCodeArtifact
@@ -180,15 +211,14 @@ export type Artifact =
   | ProductArtifact
   | MediaLookupArtifact
   | TravelArtifact
-  | GenericArtifact;
+  | AnswerArtifact
+  | GenericArtifact
+) &
+  WithSuggestions;
 
 export type ArtifactResponse = {
   artifact: Artifact;
-  meta: {
-    provider: string;
-    model: string;
-    session_id: string;
-  };
+  meta: ArtifactMeta;
 };
 
 // Ordering + labels for the action bar.

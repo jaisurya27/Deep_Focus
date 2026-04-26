@@ -4,7 +4,380 @@ Chronological record of changes on top of the `Refactor: Deep Focus → Glance`
 commit (110830b). When the branch ships, squash or re-organize into a proper
 changelog.
 
-## 2026-04-25
+## 2026-04-25 — `/artifact` replays session history on follow-ups
+
+Follow-up questions through the composer were reading as cold-start asks:
+the backend was persisting each turn into the session store but never
+wiring prior exchanges back into the request. Only `/chat` replayed
+history; `/artifact` (which every composer submission flows through as
+`action=auto`) did not. So "what about option 2?" had zero memory of
+option 1.
+
+Fix in `services/backend/app/routes/artifact.py`:
+
+- New `_history_wire(session_id)` pulls the last 8 user/assistant
+  exchanges for the session and prepends them to the wire payload after
+  the system/window-hint messages and before the current user turn —
+  same shape as `/chat`.
+- Assistant messages in this route are stored as the full artifact JSON
+  (up to 8 KB). `_condense_assistant` extracts a human-readable digest
+  (`body` / `answer` / `text` / `summary` / `explanation` /
+  `translation`, tagged with the artifact `kind`) so the downstream
+  model sees what it actually *told the user*, not a wall of braces.
+  Prevents JSON-mode from being re-primed to mimic the prior shape.
+- Works for both text-only and multimodal turns; prior turns always ride
+  as plain-string `content`, only the current turn keeps the multimodal
+  content array with the captured image.
+- `MAX_CONTEXT_EXCHANGES = 8`, `REPLAY_CHAR_CAP = 1800` per message.
+
+"Lazy context" in `CLAUDE.md` means *decide smartly whether to reuse the
+last session or start fresh on a new capture* — it does NOT mean drop
+all memory mid-session.
+
+## 2026-04-25 — kill layout-animation overlap ("rectangle below chat")
+
+When a turn finished and the artifact mounted its `SuggestionRow` ("Try
+instead…" chips) between the artifact and the composer, the outer flex
+column — annotated with `<motion.div layout>` and containing more inner
+`layout` motion elements — reflowed *every* sibling via Framer's shared
+layout. Mid-animation, the composer visibly slid through the suggestion
+row and a ghost of the old composer (or its halo) briefly rendered below
+the real composer, producing the "weird rectangle bar below the chat
+once thinking is done."
+
+Fix: dropped the `layout` prop from the outer stack wrapper, the
+composer motion, the inner AnimatePresence children (health, notice,
+context chip, smart crumbs, artifact/answer cards), and `SuggestionRow`.
+Enter/exit animations (opacity/translate/scale) stay, so individual
+elements still animate in/out nicely — we just no longer ask Framer to
+animate every sibling's position when the stack's height changes. The
+Stage's own `ResizeObserver` resizes the Electron window instantly, so
+the layout is stable.
+
+## 2026-04-25 — Siri-style thinking halo, no duplicate loading bar
+
+While a turn was streaming, the shell rendered **two** pill-shaped bars:
+an empty `FloatingAnswer` card above the composer (with the emerald
+traveling border) and the composer itself (also with the border, showing
+"Thinking…"). The top card was useless — the composer already signals
+thinking — and its exit animation (`y: +6`) left a "weird bar" sliding
+down past the composer the instant streaming ended.
+
+Fixes:
+
+- `GlanceShell`: only render `FloatingAnswer` when the assistant message
+  actually has text content. An empty streaming assistant turn no longer
+  mounts a placeholder card; the composer's own glow is the thinking UI.
+- `styles.css`: reworked `.glance-streaming-border` into a Siri-style
+  breathing halo. Dropped the clipped `::after` scanline (which could
+  only live inside the pill) in favour of a multi-layer `box-shadow`
+  that pulses between emerald and teal and bleeds several px outside
+  the element into the transparent stage halo — so the composer looks
+  like it's *glowing*, not fenced.
+
+## 2026-04-25 — visible failures + context fallback for suggestion chips
+
+Clicking a "Try instead" suggestion (e.g. Product lookup on an Identify
+artifact) was silently 400-ing and giving the user zero feedback. Two
+issues, both fixed:
+
+1. **Lost context.** `runAction` read `pendingSelection` / `pendingImage`
+   from the session store, but those slots are cleared right after every
+   send. Suggestion chips therefore shipped *no* text/image and the
+   backend rejected them (`action 'product' needs text context`). Fix:
+   when pending slots are empty, walk back through messages and reuse
+   the most recent user turn's selection/image.
+2. **Silent errors.** `failMessage` stamped `⚠️ …` into the assistant
+   message's `content`, but the render tree prefers the existing
+   artifact over `FloatingAnswer`, so the error was hidden behind the
+   old card. Fix: on any `runAuto` / `runAction` rejection we now also
+   raise a `panelNotice` (error tone) so the failure surfaces as a
+   visible toast above the artifact.
+   - Added `humanizeBackendError` which decodes `backend 400: {"detail":…}`
+     envelopes into a human sentence and detects network failures.
+   - Pre-flight `needs_image` / `needs_text` misses also surface as a
+     warn-tone notice now (instead of the button silently doing nothing).
+   - `NoticeBanner` gained an optional `onDismiss` close button so users
+     can clear errors without collapsing the shell.
+
+Aborted turns (user hit Stop) do NOT raise the notice.
+
+## 2026-04-25 — single header row (actions left, drag/close right)
+
+The artifact action rail (Copy / Follow-up / Full chat / Dismiss) and the
+shell's TopBar (drag + collapse) lived in two separate rows — the rail on
+top of the artifact, the TopBar above everything. Visually redundant and
+the rows weren't aligned.
+
+Fix: pulled `ArtifactActionRail` out of `FloatingArtifact` as its own
+export, and the shell now renders one header row at the top of the
+expanded column:
+
+```
+[copy][follow-up][full chat][dismiss] ................ [drag][X]
+```
+
+- `FloatingArtifact` is now just the card body — no action rail.
+- `ArtifactActionRail` is rendered by `GlanceShell` inside the TopBar row
+  (left slot), only when there's an artifact to act on.
+- All five action pills + drag + close are now **h-6 / w-6** (24px),
+  icons are 14px SVGs in 12px square flex wrappers. Reduced from the
+  previous h-7 so the row reads as a whisper-quiet ribbon, not a toolbar.
+- Hover/focus on an action still springs in its uppercase label and
+  expands the pill's width. Drag/close remain icon-only.
+
+Files: `apps/desktop/src/renderer/shell/FloatingArtifact.tsx`,
+`apps/desktop/src/renderer/shell/GlanceShell.tsx`.
+
+## 2026-04-25 — artifact body gets an actual background
+
+Artifacts were rendering as raw text on top of the transparent Electron
+window — fine on a dark editor, invisible/ghostly on a white page. The
+shared `Card` atom in `ArtifactCard.tsx` only drew a title row and the
+content; there was no panel behind it. `AnswerCard` was the exception
+because it wraps its body in `glass-quiet`.
+
+Fix: wrap the `Card` atom itself in `.glass` + `rounded-[22px]` +
+`px-4 py-3`. Every artifact kind (Identify, Product, Recipe, FixCode, …)
+now has an opaque acrylic panel that stays readable on any background.
+AnswerCard's inner `glass-quiet` now reads as a nested accent panel,
+which looks fine.
+
+Also deleted the dead `.aurora-bead` CSS — only the deleted
+`InlineThinking` component used it, and its rotating conic-gradient
+animations were showing up as HMR-leak streaks during live reload.
+
+Files: `apps/desktop/src/renderer/artifacts/ArtifactCard.tsx`,
+`apps/desktop/src/renderer/styles.css`.
+
+## 2026-04-25 — kill the diagonal streaks (proper streaming indicator)
+
+The `.glance-streaming-border` animation had a `transform: rotate(360deg)`
+on a 1px pseudo-ring around a non-square pill. Rotating a non-square
+element sweeps its four corners along arcs wider than the element itself
+— which is what was painting those diagonal emerald/cyan/pink streaks
+across the viewport during streaming.
+
+Replaced the whole treatment. No rotation anywhere.
+
+- Static emerald 1px border on the pill.
+- Breathing `box-shadow` that pulses between two emerald intensities
+  (`glance-streaming-pulse`, 2.4s).
+- A thin (1.5px) scan line along the bottom edge that travels
+  left→right via animated `background-position`
+  (`glance-streaming-scan`, 1.8s).
+- `overflow: hidden` on the element clips the scan line to the pill's
+  border-radius so nothing paints outside.
+
+Result: clearly "something is happening" without looking like a '90s
+Winamp visualizer.
+
+File: `apps/desktop/src/renderer/styles.css`.
+
+## 2026-04-25 — readability & artifact rail polish
+
+### Icon-first artifact rail (expand on hover)
+- `FloatingArtifact`'s action bar was five separate "COPY / REDO / ASK
+  FOLLOW-UP / FULL CHAT / DISMISS" pills floating loose below the artifact.
+  Consumed a ton of horizontal space and read as "other UI", not chrome
+  belonging to the artifact.
+- Replaced with a single glass pill containing icon-only buttons
+  (`IconAction`). Each button shows just its icon at rest; on hover/focus,
+  the label slides in with a width-animated spring. The pill tucks up
+  against the artifact (`-mt-2`) so it looks attached, not orphaned.
+
+### Suggestion pills readable on any background
+- `SuggestionRow` ("Try instead → …") and `SmartCrumbs` previously used
+  `bg-emerald-500/10 border-emerald-500/30` — essentially transparent. On
+  a white desktop background (Chrome tab, Figma canvas) they disappeared.
+- Both now use the opaque `.glass` base (same dark acrylic as the composer)
+  with an emerald ring, a glowing emerald bullet dot on the suggestion
+  pill, and bolder text. Same readability on black, white, or photographic
+  backdrops.
+
+### `AnswerCard` followups got a section label
+- The non-interactive "What is Headroom? / How does Headroom compress data?"
+  pills were visually colliding with the action rail. Added a "You might
+  ask" caption and bumped their contrast slightly so they read as a
+  secondary hint, not more buttons.
+
+### Files
+- `apps/desktop/src/renderer/shell/FloatingArtifact.tsx` (rewrite of the
+  action rail + new `IconAction`).
+- `apps/desktop/src/renderer/shell/GlanceShell.tsx` (`SuggestionRow`,
+  `SmartCrumbs` styling).
+- `apps/desktop/src/renderer/artifacts/ArtifactCard.tsx` (`AnswerCard`
+  followups section).
+
+## 2026-04-25 — night pass (killable shell, no more aurora streaks)
+
+### The close button actually closes
+- Problem: during streaming the composer was replaced by a standalone
+  `InlineThinking` pill with its own Stop button but **no** ×, and the
+  auto-expand effect re-fired on `isStreaming || lastArtifactMsg`, so a
+  click on × bounced the shell back open a frame later. Net effect: there
+  was no way to dismiss the UI once a turn was in flight.
+- Fixes:
+  - Removed `isStreaming` from the auto-expand dependency list. A close
+    during a turn now actually sticks.
+  - `minimizeShell` now `abortRef.current?.abort()`s any in-flight turn
+    AND calls `clearOutput()` before collapsing, so the effect that
+    re-opens on `lastArtifactMsg` can't re-trigger.
+  - The collapsed-orb guard also ignores `isStreaming`.
+
+### Dedicated TopBar (drag + close, always visible)
+- Old `DragGrip` (a rail of four dots) is gone. New `TopBar` is a 2-button
+  row: drag icon on the left, × on the right. Always rendered while the
+  shell is expanded, including mid-stream. The × is the universal "minimize
+  to orb" gesture; drag is the window-drag handle.
+
+### Composer IS the thinking surface (no more aurora blob)
+- Deleted `InlineThinking` and `StreamingShimmer`. The composer now stays
+  rendered at all times and takes a `streaming` prop:
+  - While streaming, the whole pill gets the `glance-streaming-border`
+    traveling emerald glow, the textarea is `disabled`, and the Send
+    button swaps to a rose-tinted Stop button (wired to the same abort
+    controller as Esc).
+  - Placeholder text becomes "Thinking…" so the state is legible without
+    a bespoke surface.
+- Removed the `layoutId="glance-core"` shared between orb and aurora bead
+  — that was what was painting those diagonal streaks across the viewport
+  during state transitions. Good riddance.
+
+### Context-aware × inside the composer
+- New composer X button with smart behavior:
+  - Draft non-empty → clear the draft (keep output).
+  - Draft empty + output on screen → clear the output (keep session id).
+  - Neither → button hidden so the row doesn't clutter.
+- Keeps the minimize-to-orb action on the TopBar separate from the
+  clear-my-work action in the composer. Cmd+K stays the hard reset.
+
+### Files
+- `apps/desktop/src/renderer/shell/GlanceShell.tsx` (substantial rewrite
+  of the expanded render + composer + TopBar; deleted `InlineThinking`,
+  `StreamingShimmer`, `DragGrip`).
+- `apps/desktop/src/renderer/shell/icons.tsx` (added `DragIcon`,
+  `StopIcon`).
+
+## 2026-04-25 — late pass (dismiss actually clears, new capture resets output)
+
+### New capture → fresh slate
+- Previously, firing `Cmd+Ctrl+S` while a prior artifact/answer was still on
+  screen left the *old* output visible and only swapped the `pendingImage`.
+  The shell still showed the stale card (and the context chip + smart crumbs
+  were gated behind `!lastArtifactMsg`, so they never appeared).
+- Added `clearOutput()` on the session store — wipes `messages`,
+  `pendingSelection`, `pendingImage` while preserving `sessionId` and
+  `providerLabel` (so mid-conversation follow-ups still thread on the backend
+  if the user types one before capturing anything new). Called from the
+  `onOpen` IPC handler on every `selection` / `region` payload so each new
+  capture starts clean and immediately shows the new context chip + smart
+  crumbs.
+
+### Dismiss = clear (not just minimize)
+- `FloatingArtifact`'s "Dismiss" button used to call `minimizeShell`, so the
+  artifact came right back the moment the user clicked the orb again. It now
+  calls `clearOutput()` — the card is really gone, composer stays open, ready
+  for the next question.
+- Added a matching close × on the `FloatingAnswer` text card (hidden while
+  streaming to avoid racing the abort button). Tooltip points at Cmd+K for
+  the hard reset.
+- Minimize (composer ×, Esc) is unchanged — still collapses to orb while
+  preserving state. The mental model is now: **×** on the *output* clears
+  output, **×** on the *composer* tucks away, **Cmd+K** wipes everything
+  including session id.
+- Files: `apps/desktop/src/renderer/stores/session.ts`,
+  `apps/desktop/src/renderer/shell/GlanceShell.tsx`.
+
+## 2026-04-25 — evening pass (orb UX overhaul + region-capture fix)
+
+### Region capture actually works now
+- **Root cause of the "select region but nothing shows up" bug:** the overlay
+  renderer was waiting on an `OVERLAY_START` IPC to learn its display's screen
+  origin, but main sent it on `did-finish-load` *before* React's `useEffect`
+  subscriber was attached. The message was missed on every single capture and
+  every drag fell into a `no-overlay-info → cancel` branch.
+- **Fix:** dropped the `OVERLAY_START` handshake entirely. Pointer events
+  already carry `screenX`/`screenY` in global screen-space coordinates; the
+  overlay now records both client and screen coords directly.
+- Added a window-level `pointerup` fallback (plus `setPointerCapture`) so a
+  release that happens off the root div still fires `finishDrag`.
+- Lowered the min-size cancel threshold to 2px and started passing a `reason`
+  string on `OVERLAY_CANCEL` so any future regression is one log line away.
+- File: `apps/desktop/src/renderer/overlay.tsx`.
+
+### Screen-Recording permission: visible feedback in the panel
+- When `systemPreferences.getMediaAccessStatus("screen")` isn't `granted`, we
+  no longer silently bail. We still show the native dialog, but we also call
+  `showPanel({ notice: { tone, title, body, action } })` so the user sees a
+  warning banner in Glance itself with an "Open System Settings" deep-link
+  button — the native dialog can easily end up buried behind fullscreen apps.
+- Added `notice?: { tone, title, body, action }` to `PanelOpenPayload`.
+- New IPC channel `IPC.OPEN_EXTERNAL` with a small allowlist (`http(s)://`,
+  `x-apple.systempreferences:`) and a `window.deepFocus.shell.openExternal`
+  preload method for the banner's action button.
+
+### One universal dismiss gesture
+- The shell used to have four distinct close behaviors (composer ×, context
+  chip ×, artifact ×, Esc) that all did *different* things. Replaced with a
+  single `minimizeShell` that tucks the UI back to the orb and preserves ALL
+  state (context chip, notice, assistant answer, streaming).
+- Context-chip × and notice-banner × are gone. To drop context, start a new
+  capture or hit `Cmd+K` (the only destructive action).
+- Removed `collapseShell`. `dismissArtifact` is now `= minimizeShell`. Esc
+  (when not streaming) also maps to `minimizeShell`.
+- The orb-collapse `useEffect` no longer re-expands on `hasContext` — so a
+  minimize-with-context truly minimizes. Clicking the orb restores state.
+
+### Smart crumbs (replace category-grouped action chips)
+- Removed the `ActionChips` component + its backend `listActions` call. The
+  category tabs (Understand / Act / Discover) and chips (Translate, Solve
+  math, Explain code, …) were cluttering the screen with context-irrelevant
+  options.
+- New `SmartCrumbs` produces 3–5 context-aware one-tap prompts by heuristic
+  over the attached selection / image / `sourceApp`:
+  - For code-ish selections (by sourceApp or content signal): Explain this
+    code, Diagnose error / Find bugs, Improve.
+  - For prose: Explain, TL;DR (on long text), What does this mean?,
+    Translate → English (on non-English), Simplify, Summarize link (on URLs).
+  - For images: Describe, Extract text, Translate → English, Explain, What
+    should I do?.
+- Crumbs fill the composer draft and auto-send.
+
+### New streaming UX (ChatGPT-voice-mode-ish)
+- The old 58px square "THINKING…" blob is gone from the expanded shell. In
+  its place:
+  - **`InlineThinking` pill** replaces the composer while streaming. Contains
+    an `aurora-bead` (30px sphere with conic-gradient halo spin + multi-radial
+    pulse + breathe), a live "Thinking…" label with animated dots, a
+    `chars` counter, and a **Stop** button that aborts the request.
+  - **`StreamingShimmer`** (3 pulsing bars) covers the beat between request
+    sent and first token.
+  - **`FloatingAnswer`** renders plain-text assistant turns as a scrollable
+    card (`white-space: pre-wrap`, max-h 360px, autoscroll to tail). While
+    streaming, it wears a conic-gradient traveling halo (`glance-streaming-border`
+    + `@property --angle`) and a blinking emerald caret (`glance-caret`).
+- Context chip and — when present — the answer card stay visible throughout
+  streaming. Only the composer swaps for the thinking pill. Crumbs hide
+  during a turn and after a turn has produced an answer.
+
+### FIXED: "response is blank" after using a smart crumb
+- The shell previously only rendered `lastArtifactMsg?.artifact`. Plain-text
+  assistant turns (which is what `sendText` — and therefore every smart crumb
+  and every composer submit — produces) were being written to the session
+  store but never shown anywhere in the panel.
+- New `lastAssistantMsg` memo finds the most recent assistant text turn (with
+  content or streaming). `FloatingAnswer` renders it. Artifacts still take
+  precedence when present.
+
+### Misc
+- Composer placeholder switches to "Ask a follow-up…" after an answer lands.
+- `CLAUDE.md`: removed the "No native Node modules" guardrail; any
+  well-maintained npm module (native or otherwise) is now fair game.
+- `CLAUDE.md`: added a mandatory docs-update guardrail — every behavior change
+  must land alongside an update to the right `docs/*.md` file.
+
+## 2026-04-25 — initial Glance shell
 
 ### Acrylic material, tuned for white backgrounds
 - All floating surfaces (`.glass`, `.glass-quiet`, `.ghost-btn`, plus a new

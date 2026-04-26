@@ -63,7 +63,15 @@ type SessionState = {
   setPendingImage: (img: AttachedImage | null) => void;
   setMode: (mode: PanelMode) => void;
   setWindowContext: (ctx: WindowContext | null) => void;
+  /** Nuke everything — messages, pending context, session id. Cmd+K. */
   clear: () => void;
+  /**
+   * Clear visible output (messages + pending context) but KEEP the backend
+   * session id and provider label. Used when a new screen capture /
+   * selection arrives so the previous artifact doesn't bleed into the new
+   * turn, and when the user explicitly dismisses an artifact/answer.
+   */
+  clearOutput: () => void;
 };
 
 export const useSession = create<SessionState>((set) => ({
@@ -131,6 +139,12 @@ export const useSession = create<SessionState>((set) => ({
       pendingSelection: null,
       pendingImage: null,
       mode: "just-ask",
+    }),
+  clearOutput: () =>
+    set({
+      messages: [],
+      pendingSelection: null,
+      pendingImage: null,
     }),
 }));
 

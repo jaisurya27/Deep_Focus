@@ -5,17 +5,55 @@ This doc covers `apps/desktop/src/renderer/shell/GlanceShell.tsx`,
 These files together implement the floating-orb experience that is the
 defining visual of Glance.
 
-## The three states
+## The two states (+ stacked surfaces)
 
 | State | Visual | Trigger |
 | --- | --- | --- |
-| **Collapsed** | 36px emerald orb with breathing gradient and halo | default; after Esc / after dismissing an artifact |
-| **Thinking** | 58px Siri-style multi-hue bloom, shows `Streaming · N chars` | during an `/artifact` or `/chat` stream |
-| **Expanded** | 520px composer pill (+ optional context chip, action bar, floating artifact) | click the orb, or `showPanel({ explicit: true })` |
+| **Collapsed** | 36px emerald orb with breathing gradient and halo | default; after `minimizeShell` (composer ×, Esc) |
+| **Expanded** | Stack of glass surfaces at 520px wide: drag-grip · (optional notice banner) · (optional context chip) · (smart crumbs OR streaming surface) · composer OR inline-thinking | click the orb, `showPanel({ explicit: true })`, or new context from a hotkey |
 
-Transitions: `popIn` for the composer, `thinkZoomIn` scales the thinking blob
-from 0.45 → 1, `orbJelly` wobbles the orb on hover, `orbSquish` squishes it
-on click, `riseIn` for the artifact card.
+Transitions: `popIn` for the composer, `riseIn` for the answer / artifact
+card, `orbJelly` wobbles the orb on hover, `orbSquish` squishes it on click,
+`slideDown` for the drag grip / context chip / notice / crumbs,
+`aurora-breathe` + `aurora-spin` + `aurora-pulse` for the thinking bead.
+
+### Streaming surfaces
+
+While a turn is in flight, the expanded panel shows, top to bottom:
+
+1. **Context chip** — stays visible so the user can see which selection /
+   image the turn is about.
+2. **`FloatingAnswer`** — plain-text assistant output. Rendered as a
+   scrollable card (`whitespace-pre-wrap`, max-h 360px) that autoscrolls to
+   the newest token. While `streaming` is true it wears a traveling
+   conic-gradient border (`.glance-streaming-border` + `@property --angle`
+   animation) and a blinking emerald caret (`.glance-caret`).
+3. **`StreamingShimmer`** — 3 pulsing bars. Shown only in the beat between
+   request-sent and first-token (when `FloatingAnswer` has nothing yet).
+4. **`InlineThinking`** — replaces the composer while streaming. `aurora-bead`
+   (30px sphere with a conic halo + multi-radial pulse + breathe) + live
+   label + char counter + `Stop` button (Esc also aborts).
+
+When a plain-text answer finishes, `FloatingAnswer` stays and the composer
+comes back with placeholder "Ask a follow-up…". Artifact replies (structured
+JSON) are rendered by `FloatingArtifact` instead and take precedence over
+`FloatingAnswer`.
+
+### Smart crumbs (context-aware quick prompts)
+
+`SmartCrumbs` replaces the earlier category-grouped `ActionChips`. Given a
+pending selection and/or image, it produces 3–5 one-tap prompts via heuristic:
+
+- Code-ish selection (by `sourceApp` or content signal: `{};`, `=>`,
+  `function`, `def`, `Traceback`, `error:`, …) → "Explain this code",
+  "Diagnose error" (on error-looking text) or "Find bugs", "Improve".
+- Prose selection → "Explain", "TL;DR" (if long), "What does this mean?",
+  "Translate → English" (on non-ASCII), "Simplify", "Summarize link" (if URL).
+- Image → "Describe", "Extract text", "Translate → English", "Explain",
+  "What should I do?".
+
+A crumb click fills the composer draft and auto-sends via `sendText()`. No
+backend schema change — crumbs just emit free-form text prompts.
 
 ## Window geometry — content-driven sizing
 
@@ -112,6 +150,92 @@ Design rules:
 - **Inner bottom shadow (-1px black 0.3).** Subtle bevel, sells it as solid.
 - **Drop shadow** is what makes the pill feel *floating*. Its reach dictates
   `HALO_MARGIN`. If you change the drop shadow's blur/offset, bump halo too.
+
+## Shell anatomy (expanded state)
+
+Stack, top-down:
+
+1. **Header row** — a single horizontal ribbon above everything. Left
+   slot: `ArtifactActionRail` (Copy / Follow-up / Full chat / Dismiss),
+   rendered only when an artifact is on screen. Right slot: the `TopBar`
+   (drag handle + ×), always present. All seven pills are `h-6 w-6`
+   glass pills with 14px SVGs — a whisper-quiet row, not a toolbar. Each
+   action button expands to reveal an uppercase label on hover/focus.
+   The × calls `minimizeShell` which aborts any in-flight turn, calls
+   `clearOutput()`, then collapses. Works mid-stream.
+2. **Optional banners** — `healthWarning`, `panelNotice`.
+3. **Optional context chip** — selection/image preview (hidden once an
+   artifact is on screen).
+4. **Smart crumbs** — heuristic one-tap prompts for the current context.
+5. **Output slot** — `FloatingArtifact` (structured) or `FloatingAnswer`
+   (text); only one at a time. The artifact body is just the card now;
+   its actions live in the header row above.
+6. **Composer** — always rendered. Doubles as the thinking surface during a
+   turn (see below).
+
+There is no separate "thinking" blob / aurora surface anymore. The
+composer IS the thinking surface — streaming === traveling emerald border
++ disabled textarea + Send→Stop button swap.
+
+## Dismiss gestures (two tiers + one hard reset)
+
+We used to have one universal `minimizeShell` wired to every ×. Problem: the
+artifact's "Dismiss" button *felt* like "get rid of this answer" but actually
+just collapsed the shell, and the answer came right back when the user
+tapped the orb again. The taxonomy is now:
+
+**1. Minimize the shell (collapse to orb).** Aborts any in-flight turn,
+clears current output, collapses. Session id + provider label persist.
+
+- `×` on the `TopBar` (always available, including mid-stream).
+- `Esc` key (if not currently streaming; during stream, Esc = Stop then
+  another Esc = collapse).
+
+**2. Clear the output (keeps session id, keeps shell open).** Drops
+`messages`, `pendingSelection`, `pendingImage` from the store via
+`clearOutput()`. Shell stays expanded with a blank composer.
+
+- Composer `×` when there's output on screen and the draft is empty.
+- Composer `×` when the draft is non-empty clears the *draft*, not the
+  output — tap again to clear the output.
+- `×` ("Dismiss") on `FloatingArtifact`.
+- `×` on `FloatingAnswer` (hidden while streaming).
+- Automatically fired from the `onOpen` IPC handler on every new selection
+  or region capture, so a fresh capture never shows the previous turn's
+  output.
+
+**3. Stop (abort an in-flight turn).** Composer's Send button morphs into a
+rose Stop button while `streaming === true`. Calls `abortRef.current.abort()`.
+Same thing Esc does mid-stream.
+
+**4. Hard reset (`Cmd+K`).** `useSession.getState().clear()` — wipes messages,
+session id, pending context, panel notice. Use this when you want a truly
+new conversation.
+
+The auto-expand `useEffect` does NOT expand on `hasContext` alone; it only
+expands on explicit triggers (`explicit: true` from IPC, a `panelNotice`, or
+a streaming start). This is what lets a minimized-with-context panel actually
+stay minimized.
+
+## Notice banners
+
+When main wants to tell the user something went wrong (today: missing
+Screen-Recording permission; soon: rate-limit / backend-down), it opens the
+panel with a `notice` in `PanelOpenPayload`:
+
+```ts
+notice: {
+  tone: "info" | "warn" | "error",
+  title: string,
+  body?: string,
+  action?: { label: string; href: string },  // renderer maps to shell.openExternal
+}
+```
+
+The renderer stores it in `panelNotice`, renders `NoticeBanner` at the top of
+the stack, and dismisses it only via `minimizeShell`. Don't add a per-banner
+close button — that re-introduces the "four different dismiss gestures"
+problem we just fixed.
 
 ## Key files
 

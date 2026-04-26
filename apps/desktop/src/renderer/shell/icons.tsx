@@ -72,6 +72,27 @@ export function GearIcon(p: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function DragIcon(p: SVGProps<SVGSVGElement>) {
+  return (
+    <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" {...p}>
+      <circle cx={9} cy={6} r={1.5} />
+      <circle cx={15} cy={6} r={1.5} />
+      <circle cx={9} cy={12} r={1.5} />
+      <circle cx={15} cy={12} r={1.5} />
+      <circle cx={9} cy={18} r={1.5} />
+      <circle cx={15} cy={18} r={1.5} />
+    </svg>
+  );
+}
+
+export function StopIcon(p: SVGProps<SVGSVGElement>) {
+  return (
+    <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" {...p}>
+      <rect x={6} y={6} width={12} height={12} rx={2} />
+    </svg>
+  );
+}
+
 export function SparkleIcon(p: SVGProps<SVGSVGElement>) {
   return (
     <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" {...p}>

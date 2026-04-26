@@ -8,7 +8,7 @@ names and payload shapes live in `apps/desktop/src/shared/ipc.ts`.
 
 | Channel | Direction | Payload | Purpose |
 | --- | --- | --- | --- |
-| `IPC.PANEL_OPEN` | main → renderer | `PanelOpenPayload { mode, explicit?, selection?, image_data_url?, window_context?, anchor?, … }` | Seed the panel when a hotkey/tray/open-from-code request arrives. `explicit: true` expands the orb into the composer. |
+| `IPC.PANEL_OPEN` | main → renderer | `PanelOpenPayload { mode, explicit?, selection?, image_data_url?, window_context?, anchor?, notice?, … }` | Seed the panel when a hotkey/tray/open-from-code request arrives. `explicit: true` expands the orb into the composer. `notice` surfaces a warning/error banner (see below). |
 | `IPC.PANEL_HIDE` | renderer → main | — | Hide the panel window (does not destroy). |
 | `IPC.PANEL_SET_CONTENT_SIZE` | renderer → main | `{ width, height }` | Resize the BrowserWindow to match visible content + halo. Fired continuously by `Stage`'s `ResizeObserver`. |
 | `IPC.PANEL_DRAG_START` | renderer → main | `{ mouseX, mouseY }` (screen coords) | Begin a manual window drag. Main captures the current window position. |
@@ -19,6 +19,24 @@ names and payload shapes live in `apps/desktop/src/shared/ipc.ts`.
 | `IPC.SETTINGS_GET` / `IPC.SETTINGS_SET` | renderer ↔ main | `Partial<Settings>` | Read/write persisted settings (hotkeys, providers, `panelPosition`, …). |
 | `IPC.SECRETS_SET` / `IPC.SECRETS_GET` | renderer ↔ main | — | `safeStorage`-backed API keys. |
 | `IPC.OPEN_HISTORY` / `IPC.OPEN_SETTINGS` | renderer → main | — | Open the respective windows. |
+| `IPC.OPEN_EXTERNAL` | renderer → main | `href: string` | Open a URL via Electron's `shell.openExternal`. Main allowlists `http://`, `https://`, and `x-apple.systempreferences:` — anything else is dropped. Used by `NoticeBanner`'s action button (e.g. deep-link to the Screen-Recording pane in System Settings). |
+| `IPC.CAPTURE_OVERLAY_CANCEL` | renderer → main | `reason?: string` | Sent when the capture overlay bails (Esc, too-small, pointer-cancel). `reason` is logged by main to diagnose future regressions. |
+
+### `PanelOpenPayload.notice`
+
+```ts
+notice?: {
+  tone: "info" | "warn" | "error";
+  title: string;
+  body?: string;
+  action?: { label: string; href: string };   // href is handed to OPEN_EXTERNAL
+} | null;
+```
+
+Today's only producer is `capture/region.impl.ts` when Screen Recording
+permission is missing or a capture throws; future producers should funnel
+backend-down / rate-limit warnings through the same channel instead of
+adding new bespoke banners.
 
 ## Preload API surface
 
@@ -35,6 +53,8 @@ window.deepFocus = {
     getActiveWindow(), getSelection(),
   },
   capture: { startRegion() },
+  overlay: { complete(rect), cancel(reason?) },
+  shell: { openExternal(href) },              // goes through OPEN_EXTERNAL allowlist
   settings: { get(), set(partial) },
   secrets: { get(name), set(name, val) },
   openHistory(), openSettings(),

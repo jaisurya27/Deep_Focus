@@ -6,15 +6,14 @@ import {
   useRef,
   useState,
 } from "react";
+import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 
-import type { ActionSummary } from "../../shared/artifacts";
+import type { ActionSummary, SuggestedAction } from "../../shared/artifacts";
 import type { PanelOpenPayload } from "../../shared/ipc";
 import {
   checkHealth,
   runArtifact,
-  streamChat,
-  streamVision,
-  type WireMessage,
+  type RoutingInfo,
 } from "../lib/api";
 import {
   makeMessageId,
@@ -23,14 +22,26 @@ import {
   type AttachedSelection,
   type ChatMessage,
 } from "../stores/session";
-import { FloatingArtifact } from "./FloatingArtifact";
+import { Markdown } from "../lib/markdown";
+import { ArtifactActionRail, FloatingArtifact } from "./FloatingArtifact";
 import {
   CloseIcon,
+  DragIcon,
   GearIcon,
   MicIcon,
   SendIcon,
   SparkleIcon,
+  StopIcon,
 } from "./icons";
+
+// ---------------------------------------------------------------------
+// Framer Motion reusable transitions.
+// We lean on a single "butter" spring everywhere so state morphs feel
+// cohesive — the orb, composer, artifact, and thinking pill share a family.
+// ---------------------------------------------------------------------
+const SPRING = { type: "spring", stiffness: 420, damping: 36, mass: 0.9 } as const;
+const SPRING_BOUNCY = { type: "spring", stiffness: 520, damping: 26, mass: 0.9 } as const;
+const SPRING_SOFT = { type: "spring", stiffness: 280, damping: 30 } as const;
 
 /**
  * Glance shell — single morphing element anchored to the bottom-right of
@@ -50,7 +61,7 @@ export function GlanceShell() {
   const [panelNotice, setPanelNotice] = useState<
     NonNullable<PanelOpenPayload["notice"]> | null
   >(null);
-  const [artifactProgress, setArtifactProgress] = useState(0);
+  const [, setArtifactProgress] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -62,17 +73,31 @@ export function GlanceShell() {
     [messages],
   );
 
+  // The most recent assistant text turn — either mid-stream or finished. Used
+  // to drive the FloatingAnswer card so a plain-text response (e.g. what a
+  // smart crumb produces) actually shows up in the panel.
+  const lastAssistantMsg = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m.role !== "assistant") continue;
+      if (m.artifact) return null; // artifact takes precedence
+      if (m.content || m.streaming) return m;
+      return null;
+    }
+    return null;
+  }, [messages]);
+
   const hasContext = !!pendingSelection?.text || !!pendingImage?.dataUrl;
 
-  // Auto-expand while a turn is streaming, when an artifact lands, or when
-  // the main process surfaces a notice. Context arrival is handled by the
-  // IPC onOpen handler below so the user can collapse-with-context and have
-  // the orb stay collapsed until they explicitly tap it again.
+  // Auto-expand when an artifact lands or a notice is surfaced. Context
+  // arrival is handled by the IPC onOpen handler below. We deliberately do
+  // NOT re-expand on `isStreaming` — if the user closes the shell mid-turn
+  // we abort and respect the close.
   useEffect(() => {
-    if (isStreaming || lastArtifactMsg || panelNotice) {
+    if (lastArtifactMsg || panelNotice) {
       setExpanded(true);
     }
-  }, [isStreaming, lastArtifactMsg, panelNotice]);
+  }, [lastArtifactMsg, panelNotice]);
 
   // --- Wire up panel open / health -----------------------------------
 
@@ -91,11 +116,18 @@ export function GlanceShell() {
         const sel = payload.selectionText
           ? { text: payload.selectionText, sourceApp: payload.sourceApp ?? null }
           : null;
+        // New capture → drop prior output so the shell refocuses on this
+        // context instead of showing the previous artifact/answer.
+        if (sel) store.clearOutput();
         store.setPendingSelection(sel);
         store.setPendingImage(null);
         shouldExpand = !!sel;
       } else if (payload.mode === "region") {
         if (payload.imageDataUrl) {
+          // New capture → drop prior output so the shell refocuses on this
+          // region. The backend session id stays so follow-ups can reference
+          // earlier turns if the user types one.
+          store.clearOutput();
           store.setPendingImage({
             dataUrl: payload.imageDataUrl,
             width: payload.width,
@@ -142,10 +174,13 @@ export function GlanceShell() {
     };
   }, []);
 
-  // ONE universal dismiss gesture: tuck away to the orb, preserve state.
-  // Context survives across minimize/reopen. To nuke everything (context +
-  // chat history) use Cmd+K — that's the one explicit reset.
+  // Tuck away to the orb. We abort any in-flight turn AND clear the current
+  // output so the auto-expand effect (which re-opens on `lastArtifactMsg` or
+  // `panelNotice`) doesn't immediately bounce us back open. Session id +
+  // provider label stay — Cmd+K is the hard reset.
   const minimizeShell = useCallback(() => {
+    abortRef.current?.abort();
+    useSession.getState().clearOutput();
     setExpanded(false);
     setDraft("");
     setPanelNotice(null);
@@ -171,19 +206,37 @@ export function GlanceShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [isStreaming, minimizeShell]);
 
-  // --- Send text turn ------------------------------------------------
+  // Routing info for the in-flight auto turn (what the agent *picked*). This
+  // lets the thinking pill show a "Routing → Explain code" breadcrumb before
+  // the artifact lands, and drives the suggestion chips beside the artifact.
+  const [, setLastRouting] = useState<RoutingInfo | null>(null);
 
-  const sendText = useCallback(
-    async (text: string) => {
-      if (!text.trim() || isStreaming) return;
+  // --- Run an auto-routed artifact (composer free-form) --------------
+  //
+  // Every composer submission goes through `/artifact` with action="auto"
+  // — the backend's router picks the best artifact kind. Free-form prose
+  // questions land as `kind: "answer"` and render in the answer card, so
+  // the experience is unified: one pipeline, one output container, one
+  // place for suggestions.
+
+  const runAuto = useCallback(
+    async (
+      instruction: string,
+      opts?: { preferText?: string | null; preferImageDataUrl?: string | null },
+    ) => {
+      if (isStreaming) return;
       const store = useSession.getState();
       const selection = store.pendingSelection;
       const image = store.pendingImage;
+      const imageUrl = opts?.preferImageDataUrl ?? image?.dataUrl ?? null;
+      const text = opts?.preferText ?? selection?.text ?? null;
+      const trimmedInstr = instruction.trim();
+      if (!trimmedInstr && !text && !imageUrl) return;
 
       const userMsg: ChatMessage = {
         id: makeMessageId(),
         role: "user",
-        content: text,
+        content: trimmedInstr || (text ? text.slice(0, 160) : "(image context)"),
         source: store.mode,
         selection: selection ?? null,
         image: image ?? null,
@@ -194,6 +247,7 @@ export function GlanceShell() {
         content: "",
         streaming: true,
         source: store.mode,
+        action: "auto",
       };
       store.appendMessage(userMsg);
       store.appendMessage(assistantMsg);
@@ -201,37 +255,17 @@ export function GlanceShell() {
       setDraft("");
       store.setPendingSelection(null);
       store.setPendingImage(null);
+      setLastRouting(null);
+      setArtifactProgress(0);
 
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const wire: WireMessage[] = [{ role: "user", content: text }];
-      const handlers = {
-        sessionId: store.sessionId,
-        preset: null,
-        source: store.mode,
-        sourceText: selection?.text ?? null,
-        windowContext: store.windowContext,
-        onMeta: (meta: { provider: string; model: string }) =>
-          useSession.getState().setProviderLabel(`${meta.provider} · ${meta.model}`),
-        onToken: (delta: string) =>
-          useSession.getState().appendToken(assistantMsg.id, delta),
-        onDone: ({ sessionId }: { sessionId: string }) => {
-          if (sessionId) useSession.getState().setSessionId(sessionId);
-          useSession.getState().finalizeMessage(assistantMsg.id);
-          useSession.getState().setStreaming(false);
-        },
-        onError: (msg: string) =>
-          useSession.getState().failMessage(assistantMsg.id, msg),
-        signal: controller.signal,
-        messages: wire,
-      };
-
-      // Decide which image to send.
-      // 1. Explicit region capture (Cmd+Ctrl+S) wins — user targeted it.
-      // 2. Otherwise take an ambient full-screen snapshot so the model sees
-      //    exactly what's on screen. Falls back to text-only on any failure.
-      let wireImage: string | null = image?.dataUrl ?? null;
+      // Decide which image to send to the artifact router.
+      // 1. Explicit region capture (Cmd+Ctrl+S) or caller-provided image wins.
+      // 2. Otherwise grab an ambient full-screen snapshot so the model sees
+      //    what's actually on screen. Falls back gracefully on any failure.
+      let wireImage: string | null = imageUrl;
       if (!wireImage) {
         try {
           const t0 = performance.now();
@@ -243,51 +277,117 @@ export function GlanceShell() {
               `[chat] ambient full-screen capture attached (${cap.width}×${cap.height}, ${ms}ms)`,
             );
           } else {
-            console.info(`[chat] ambient capture unavailable (${ms}ms) — text-only`);
+            console.info(`[chat] ambient capture unavailable (${ms}ms) — no image context`);
           }
         } catch (err) {
-          console.warn("[chat] ambient capture threw — text-only:", err);
+          console.warn("[chat] ambient capture threw — continuing without image:", err);
         }
       }
 
       try {
-        if (wireImage) {
-          await streamVision({ ...handlers, imageDataUrl: wireImage });
-        } else {
-          await streamChat(handlers);
+        const res = await runArtifact({
+          action: "auto",
+          text,
+          imageDataUrl: wireImage,
+          userInstruction: trimmedInstr || null,
+          sessionId: store.sessionId,
+          windowContext: store.windowContext,
+          signal: controller.signal,
+          onMeta: (meta) => {
+            useSession
+              .getState()
+              .setProviderLabel(`${meta.provider} · ${meta.model}`);
+          },
+          onProgress: (chars) => setArtifactProgress(chars),
+          onRouting: (routing) => {
+            setLastRouting(routing);
+            useSession.getState().updateMessage(assistantMsg.id, {
+              action: routing.action,
+            });
+          },
+        });
+        useSession.getState().updateMessage(assistantMsg.id, {
+          streaming: false,
+          artifact: res.artifact,
+          content: "",
+          action: res.meta?.routed_action ?? assistantMsg.action ?? "auto",
+        });
+        if (res.meta?.session_id) {
+          useSession.getState().setSessionId(res.meta.session_id);
+        }
+        if (res.meta?.provider && res.meta?.model) {
+          useSession
+            .getState()
+            .setProviderLabel(`${res.meta.provider} · ${res.meta.model}`);
         }
       } catch (err) {
-        useSession
-          .getState()
-          .failMessage(
-            assistantMsg.id,
-            err instanceof Error ? err.message : String(err),
-          );
-        useSession.getState().setStreaming(false);
+        const message = err instanceof Error ? err.message : String(err);
+        useSession.getState().failMessage(assistantMsg.id, message);
+        if (!controller.signal.aborted) {
+          setPanelNotice({
+            tone: "error",
+            title: "That didn't go through",
+            body: humanizeBackendError(message),
+          });
+        }
       } finally {
+        useSession.getState().setStreaming(false);
         abortRef.current = null;
+        setArtifactProgress(0);
       }
     },
     [isStreaming],
   );
 
-  // --- Run an artifact action ---------------------------------------
+  // Back-compat shim: any legacy caller that used sendText stays working.
+  const sendText = runAuto;
+
+  // --- Run an explicit artifact action (chip click / suggestion) ----
 
   const runAction = useCallback(
-    async (action: ActionSummary) => {
+    async (action: ActionSummary | { id: string; label?: string; needs_image?: boolean; needs_text?: boolean }) => {
       if (isStreaming) return;
       const store = useSession.getState();
-      const sel = store.pendingSelection;
-      const img = store.pendingImage;
+      // Prefer pending context, but fall back to whatever the previous user
+      // turn carried. This is crucial for "Try instead" suggestions: the
+      // pending slots are cleared after each send, so without this fallback
+      // the backend sees no text/image and 400s.
+      let sel = store.pendingSelection;
+      let img = store.pendingImage;
+      if (!sel?.text && !img?.dataUrl) {
+        for (let i = store.messages.length - 1; i >= 0; i -= 1) {
+          const m = store.messages[i];
+          if (m.role !== "user") continue;
+          if (m.selection?.text || m.image?.dataUrl) {
+            sel = m.selection ?? null;
+            img = m.image ?? null;
+            break;
+          }
+        }
+      }
       const hasText = !!sel?.text?.trim();
       const hasImg = !!img?.dataUrl;
-      if (action.needs_image && !hasImg) return;
-      if (action.needs_text && !hasText && !hasImg) return;
+      if (action.needs_image && !hasImg) {
+        setPanelNotice({
+          tone: "warn",
+          title: `${action.label ?? action.id} needs an image`,
+          body: "Capture a region (Cmd+Ctrl+S) and try again.",
+        });
+        return;
+      }
+      if (action.needs_text && !hasText && !hasImg) {
+        setPanelNotice({
+          tone: "warn",
+          title: `${action.label ?? action.id} needs context`,
+          body: "Select some text or capture a region first.",
+        });
+        return;
+      }
 
       const userMsg: ChatMessage = {
         id: makeMessageId(),
         role: "user",
-        content: action.label,
+        content: action.label ?? action.id,
         source: store.mode,
         preset: `artifact:${action.id}`,
         selection: sel ?? null,
@@ -342,12 +442,15 @@ export function GlanceShell() {
             .setProviderLabel(`${res.meta.provider} · ${res.meta.model}`);
         }
       } catch (err) {
-        useSession
-          .getState()
-          .failMessage(
-            assistantMsg.id,
-            err instanceof Error ? err.message : String(err),
-          );
+        const message = err instanceof Error ? err.message : String(err);
+        useSession.getState().failMessage(assistantMsg.id, message);
+        if (!controller.signal.aborted) {
+          setPanelNotice({
+            tone: "error",
+            title: `${action.label ?? action.id} failed`,
+            body: humanizeBackendError(message),
+          });
+        }
       } finally {
         useSession.getState().setStreaming(false);
         abortRef.current = null;
@@ -364,104 +467,222 @@ export function GlanceShell() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
 
-  // Artifact card's close → same universal minimize. The artifact stays in
-  // the session store so "full chat" still has it; tapping the orb brings
-  // it back. Hard reset is Cmd+K.
-  const dismissArtifact = minimizeShell;
+  // Artifact / answer "Dismiss" → actually clear the visible output so the
+  // next capture (or the next question) starts on a blank slate. Backend
+  // session id stays, so follow-ups still reference the same conversation
+  // from the user's POV if they type one before capturing anything new.
+  // The full-chat window still has the history. Cmd+K is the hard reset
+  // (wipes session id too).
+  const dismissArtifact = useCallback(() => {
+    useSession.getState().clearOutput();
+    setPanelNotice(null);
+    setDraft("");
+  }, []);
 
   // ------------------------------------------------------------------
   // Render
   // ------------------------------------------------------------------
 
-  // Collapsed: just the orb.
-  if (!expanded && !isStreaming && !lastArtifactMsg && !panelNotice) {
+  // Collapsed: just the orb. (We intentionally ignore `isStreaming` here so
+  // a user who hits × during a turn really does collapse — minimizeShell
+  // already aborted the in-flight controller.)
+  if (!expanded && !lastArtifactMsg && !panelNotice) {
     return (
       <Stage>
-        <DraggableOrb
-          onClick={() => {
-            setExpanded(true);
-            requestAnimationFrame(() => inputRef.current?.focus());
-          }}
-        />
+        <LayoutGroup id="glance-shell">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key="orb"
+              layout
+              initial={{ scale: 0.3, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.3, opacity: 0 }}
+              transition={SPRING_BOUNCY}
+            >
+              <DraggableOrb
+                onClick={() => {
+                  setExpanded(true);
+                  requestAnimationFrame(() => inputRef.current?.focus());
+                }}
+              />
+            </motion.div>
+          </AnimatePresence>
+        </LayoutGroup>
       </Stage>
     );
   }
 
   // Expanded states — context chip + artifact (if any) + composer (if no artifact).
+  const suggestedAction: SuggestedAction | null =
+    (lastArtifactMsg?.artifact as unknown as { suggested_action?: SuggestedAction })?.suggested_action ?? null;
+  const suggestedAlternatives: SuggestedAction[] =
+    (lastArtifactMsg?.artifact as unknown as { suggested_alternatives?: SuggestedAction[] })?.suggested_alternatives ?? [];
+
   return (
     <Stage>
-      <div className="flex w-[520px] flex-col items-end gap-2.5">
-        <DragGrip />
-
-        {healthWarning ? (
-          <div className="slide-down rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-200">
-            {healthWarning}
-          </div>
-        ) : null}
-
-        {panelNotice ? <NoticeBanner notice={panelNotice} /> : null}
-
-        {hasContext && !lastArtifactMsg ? (
-          <ContextChip selection={pendingSelection} image={pendingImage} />
-        ) : null}
-
-        {hasContext && !lastArtifactMsg && !isStreaming ? (
-          <SmartCrumbs
-            selection={pendingSelection}
-            image={pendingImage}
-            disabled={isStreaming}
-            onPick={(prompt) => {
-              setDraft(prompt);
-              void sendText(prompt);
-            }}
-          />
-        ) : null}
-
-        {isStreaming ? (
-          <div className="rise-in flex flex-col items-end gap-2">
-            <div className="thinking" />
-            <div className="text-[11px] font-mono uppercase tracking-[0.2em] text-slate-400">
-              {artifactProgress > 0
-                ? `Streaming · ${artifactProgress.toLocaleString()} chars`
-                : "Thinking…"}
+      <LayoutGroup id="glance-shell">
+        <div className="flex w-[520px] flex-col items-end gap-2.5">
+          <div className="flex w-full items-center justify-between gap-2">
+            <div className="flex items-center gap-1">
+              {lastArtifactMsg?.artifact ? (
+                <ArtifactActionRail
+                  artifact={lastArtifactMsg.artifact}
+                  onClose={dismissArtifact}
+                  onFollowUp={followUp}
+                  onOpenChat={() => window.deepFocus?.history?.open?.()}
+                />
+              ) : null}
             </div>
+            <TopBar onClose={minimizeShell} />
           </div>
-        ) : lastArtifactMsg?.artifact ? (
-          <FloatingArtifact
-            artifact={lastArtifactMsg.artifact}
-            onClose={dismissArtifact}
-            onFollowUp={followUp}
-            onOpenChat={() => window.deepFocus?.history?.open?.()}
-          />
-        ) : null}
 
-        {/* Composer stays visible when we're not showing an artifact,
-            and also when the user explicitly asked for a follow-up. */}
-        {!isStreaming ? (
-          <FloatingComposer
-            ref={inputRef}
-            value={draft}
-            onChange={setDraft}
-            onSend={() => {
-              const text = draft.trim();
-              if (!text) return;
-              void sendText(text);
-            }}
-            onMic={() => {
-              /* TODO: wire ElevenLabs STT */
-            }}
-            placeholder={
-              hasContext
-                ? "Ask anything about the attached context…"
-                : mode === "region"
-                  ? "Ask about the captured region…"
-                  : "Ask anything…"
-            }
-            providerLabel={providerLabel}
-            onClose={minimizeShell}
-          />
-        ) : null}
-      </div>
+          <AnimatePresence initial={false}>
+            {healthWarning ? (
+              <motion.div
+                key="health"
+
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={SPRING_SOFT}
+                className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-200"
+              >
+                {healthWarning}
+              </motion.div>
+            ) : null}
+
+            {panelNotice ? (
+              <motion.div
+                key="notice"
+
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={SPRING_SOFT}
+              >
+                <NoticeBanner
+                  notice={panelNotice}
+                  onDismiss={() => setPanelNotice(null)}
+                />
+              </motion.div>
+            ) : null}
+
+            {hasContext && !lastArtifactMsg ? (
+              <motion.div
+                key="context-chip"
+
+                initial={{ opacity: 0, y: -6, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -6, scale: 0.96 }}
+                transition={SPRING}
+              >
+                <ContextChip selection={pendingSelection} image={pendingImage} />
+              </motion.div>
+            ) : null}
+
+            {hasContext && !lastArtifactMsg && !lastAssistantMsg && !isStreaming ? (
+              <motion.div
+                key="smart-crumbs"
+
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.18 }}
+              >
+                <SmartCrumbs
+                  selection={pendingSelection}
+                  image={pendingImage}
+                  disabled={isStreaming}
+                  onPick={(prompt) => {
+                    setDraft(prompt);
+                    void sendText(prompt);
+                  }}
+                />
+              </motion.div>
+            ) : null}
+
+            {/* Answer card / Artifact card / shimmer — in that precedence. */}
+            {lastArtifactMsg?.artifact ? (
+              <motion.div
+                key={`artifact-${lastArtifactMsg.id}`}
+
+                initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                transition={SPRING}
+                className="w-full"
+              >
+                <FloatingArtifact artifact={lastArtifactMsg.artifact} />
+                <SuggestionRow
+                  primary={suggestedAction}
+                  alternatives={suggestedAlternatives}
+                  disabled={isStreaming}
+                  onPick={(id, label) =>
+                    void runAction({ id, label: label ?? id })
+                  }
+                />
+              </motion.div>
+            ) : lastAssistantMsg && lastAssistantMsg.content ? (
+              <motion.div
+                key={`answer-${lastAssistantMsg.id}`}
+
+                initial={{ opacity: 0, y: 10, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 6, scale: 0.97 }}
+                transition={SPRING}
+                className="w-full"
+              >
+                <FloatingAnswer
+                  text={lastAssistantMsg.content}
+                  streaming={!!lastAssistantMsg.streaming}
+                  onClose={dismissArtifact}
+                />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+
+          {/* Composer is ALWAYS rendered in expanded mode. While a turn is
+              streaming, the input is disabled, the whole pill shows the
+              traveling emerald border, and the Send button morphs into Stop.
+              This is the entire "thinking" UX — no separate blob, no aurora. */}
+          <motion.div
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={SPRING}
+            className="w-full"
+          >
+            <FloatingComposer
+              ref={inputRef}
+              value={draft}
+              onChange={setDraft}
+              streaming={isStreaming}
+              onSend={() => {
+                const text = draft.trim();
+                if (!text) return;
+                void sendText(text);
+              }}
+              onStop={() => abortRef.current?.abort()}
+              onMic={() => {
+                /* TODO: wire ElevenLabs STT */
+              }}
+              onClearOutput={dismissArtifact}
+              hasOutput={!!lastArtifactMsg || !!lastAssistantMsg}
+              placeholder={
+                isStreaming
+                  ? "Thinking…"
+                  : hasContext
+                    ? lastAssistantMsg
+                      ? "Ask a follow-up…"
+                      : "Ask anything about the attached context…"
+                    : mode === "region"
+                      ? "Ask about the captured region…"
+                      : "Ask anything…"
+              }
+              providerLabel={providerLabel}
+            />
+          </motion.div>
+        </div>
+      </LayoutGroup>
     </Stage>
   );
 }
@@ -509,23 +730,31 @@ function Stage({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------
-// Drag grip — small handle users can grab to move the whole window.
+// TopBar — drag handle on the left, close (minimize) on the right. Always
+// visible while the shell is expanded so the user can grab or dismiss at
+// any time, including while a turn is streaming.
 // ---------------------------------------------------------------------
 
-function DragGrip() {
-  const handlers = useWindowDragHandlers();
+function TopBar({ onClose }: { onClose: () => void }) {
+  const dragHandlers = useWindowDragHandlers();
   return (
-    <div
-      title="Drag to move Glance"
-      className="slide-down glass flex h-5 w-14 cursor-grab items-center justify-center rounded-full active:cursor-grabbing"
-      {...handlers}
-    >
-      <div className="flex gap-0.5">
-        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
-        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
-        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
-        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
-      </div>
+    <div className="flex items-center gap-1">
+      <button
+        title="Drag to move"
+        aria-label="Drag to move"
+        className="glass flex h-6 w-6 cursor-grab items-center justify-center rounded-full text-slate-400 hover:text-slate-100 active:cursor-grabbing"
+        {...dragHandlers}
+      >
+        <DragIcon />
+      </button>
+      <button
+        onClick={onClose}
+        title="Collapse (Esc)"
+        aria-label="Collapse"
+        className="glass flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-rose-500/20 hover:text-rose-100"
+      >
+        <CloseIcon />
+      </button>
     </div>
   );
 }
@@ -583,10 +812,13 @@ function useWindowDragHandlers(onClick?: () => void) {
 function DraggableOrb({ onClick }: { onClick: () => void }) {
   const handlers = useWindowDragHandlers(onClick);
   return (
-    <button
+    <motion.button
       aria-label="Open Glance (drag to reposition)"
       title="Click to open · drag to move"
-      className="orb pop-in"
+      className="orb"
+      whileHover={{ scale: 1.12, rotate: -4 }}
+      whileTap={{ scale: 0.88, rotate: 6 }}
+      transition={SPRING_BOUNCY}
       {...handlers}
     />
   );
@@ -640,8 +872,10 @@ function ContextChip({
 
 function NoticeBanner({
   notice,
+  onDismiss,
 }: {
   notice: NonNullable<PanelOpenPayload["notice"]>;
+  onDismiss?: () => void;
 }) {
   const tone = notice.tone ?? "warn";
   const palette =
@@ -675,7 +909,178 @@ function NoticeBanner({
           </button>
         ) : null}
       </div>
+      {onDismiss ? (
+        <button
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          title="Dismiss"
+          className="-mr-1 -mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-slate-400/80 transition hover:bg-white/10 hover:text-slate-100"
+        >
+          <CloseIcon />
+        </button>
+      ) : null}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// FloatingAnswer — a readable, streaming-aware text card. Renders the
+// assistant's plain-text response (what smart crumbs and free-form text
+// turns produce). Structured JSON responses are rendered by FloatingArtifact
+// instead; this is the fallback / default path.
+// ---------------------------------------------------------------------
+
+function FloatingAnswer({
+  text,
+  streaming,
+  onClose,
+}: {
+  text: string;
+  streaming: boolean;
+  onClose?: () => void;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  // Autoscroll to the newest token so long streams stay in view without
+  // stealing focus from the composer.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [text]);
+
+  return (
+    <div
+      className={
+        "rise-in glass relative w-full max-w-[520px] rounded-[22px] px-4 py-3 " +
+        (streaming ? "glance-streaming-border" : "")
+      }
+    >
+      {onClose && !streaming ? (
+        <button
+          onClick={onClose}
+          aria-label="Clear answer"
+          title="Clear answer (Cmd+K wipes everything)"
+          className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full text-slate-400 transition hover:bg-white/10 hover:text-slate-100"
+        >
+          <CloseIcon />
+        </button>
+      ) : null}
+      <div
+        ref={scrollerRef}
+        className={
+          "glance-answer max-h-[360px] overflow-y-auto text-[13.5px] leading-relaxed text-slate-100" +
+          (onClose && !streaming ? " pr-7" : "")
+        }
+      >
+        {text ? <Markdown content={text} /> : streaming ? " " : ""}
+        {streaming ? <span className="glance-caret" /> : null}
+      </div>
+    </div>
+  );
+}
+
+// Turn raw backend/fetch errors into something a human wants to read. Keeps
+// the original detail if we can't recognize it so debugging stays possible.
+function humanizeBackendError(raw: string): string {
+  const s = raw.trim();
+  if (!s) return "Unknown error.";
+  // `backend 400: {"detail":"action 'product' needs text context"}`
+  const m = /^backend\s+(\d{3}):\s*(.*)$/i.exec(s);
+  if (m) {
+    const status = Number(m[1]);
+    let detail = m[2]?.trim() ?? "";
+    try {
+      const parsed = JSON.parse(detail);
+      if (parsed && typeof parsed === "object" && typeof parsed.detail === "string") {
+        detail = parsed.detail;
+      }
+    } catch {
+      /* keep raw detail */
+    }
+    if (status === 400) return detail || "The backend rejected that request.";
+    if (status === 404) return "Backend endpoint not found. Is the API out of date?";
+    if (status === 429) return "Rate limited — wait a moment and try again.";
+    if (status >= 500) return detail || "Backend hit an internal error. Check the server logs.";
+    return detail || s;
+  }
+  if (/failed to fetch|network|ECONNREFUSED/i.test(s)) {
+    return "Couldn't reach the backend. Is `pnpm dev:backend` running?";
+  }
+  return s;
+}
+
+function prettyActionId(id: string): string {
+  return id
+    .replace(/_/g, " ")
+    .replace(/^\w/, (c) => c.toUpperCase());
+}
+
+// ---------------------------------------------------------------------
+// SuggestionRow — "this looks like code. Try explain_code?"
+// Rendered beside an artifact when the agent (or the router) thinks a
+// different artifact kind is actually a better fit. Click → rerun as
+// that kind with the same context.
+// ---------------------------------------------------------------------
+
+function SuggestionRow({
+  primary,
+  alternatives,
+  disabled,
+  onPick,
+}: {
+  primary: SuggestedAction | null;
+  alternatives: SuggestedAction[];
+  disabled: boolean;
+  onPick: (id: string, label?: string) => void;
+}) {
+  const items: SuggestedAction[] = [];
+  if (primary?.id) items.push(primary);
+  for (const a of alternatives) {
+    if (a?.id && !items.find((i) => i.id === a.id)) items.push(a);
+  }
+  if (!items.length) return null;
+  return (
+    <motion.div
+      initial="hidden"
+      animate="visible"
+      variants={{
+        hidden: {},
+        visible: { transition: { staggerChildren: 0.04, delayChildren: 0.06 } },
+      }}
+      className="mt-3 flex max-w-[520px] flex-wrap items-center justify-end gap-1.5"
+    >
+      <motion.div
+        variants={{
+          hidden: { opacity: 0, y: 4 },
+          visible: { opacity: 1, y: 0, transition: SPRING_SOFT },
+        }}
+        className="mr-1 font-mono text-[9.5px] uppercase tracking-[0.16em] text-slate-400"
+      >
+        Try instead
+      </motion.div>
+      {items.map((s, i) => (
+        <motion.button
+          key={`${s.id}-${i}`}
+          variants={{
+            hidden: { opacity: 0, y: 6, scale: 0.94 },
+            visible: { opacity: 1, y: 0, scale: 1, transition: SPRING },
+          }}
+          whileHover={{ scale: 1.03, y: -1 }}
+          whileTap={{ scale: 0.96 }}
+          disabled={disabled}
+          onClick={() => onPick(s.id, s.label)}
+          title={s.reason ?? ""}
+          className="glass flex items-center gap-1.5 rounded-full px-3 py-[5px] text-[11px] text-emerald-200 ring-1 ring-emerald-400/40 transition hover:text-emerald-100 hover:ring-emerald-300/70 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.8)]" />
+          <span className="font-medium">{prettyActionId(s.label ?? s.id)}</span>
+          {s.reason ? (
+            <span className="max-w-[220px] truncate font-normal text-slate-300/80">· {s.reason}</span>
+          ) : null}
+        </motion.button>
+      ))}
+    </motion.div>
   );
 }
 
@@ -703,19 +1108,33 @@ function SmartCrumbs({
   if (!crumbs.length) return null;
 
   return (
-    <div className="slide-down flex max-w-[480px] flex-wrap justify-end gap-1.5">
+    <motion.div
+      initial="hidden"
+      animate="visible"
+      variants={{
+        hidden: {},
+        visible: { transition: { staggerChildren: 0.035, delayChildren: 0.04 } },
+      }}
+      className="flex max-w-[480px] flex-wrap justify-end gap-1.5"
+    >
       {crumbs.map((c) => (
-        <button
+        <motion.button
           key={c.label}
+          variants={{
+            hidden: { opacity: 0, y: 6, scale: 0.94 },
+            visible: { opacity: 1, y: 0, scale: 1, transition: SPRING },
+          }}
+          whileHover={{ scale: 1.04, y: -1 }}
+          whileTap={{ scale: 0.94 }}
           disabled={disabled}
           onClick={() => onPick(c.prompt)}
           title={c.prompt}
-          className="rounded-full border border-emerald-500/25 bg-emerald-500/5 px-3 py-[5px] text-[11.5px] text-emerald-100/90 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 hover:text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="glass rounded-full px-3 py-[5px] text-[11.5px] font-medium text-emerald-200 ring-1 ring-emerald-400/40 transition hover:text-emerald-100 hover:ring-emerald-300/70 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {c.label}
-        </button>
+        </motion.button>
       ))}
-    </div>
+    </motion.div>
   );
 }
 
@@ -794,47 +1213,80 @@ function buildSmartCrumbs({
 
 
 // ---------------------------------------------------------------------
-// Composer pill — mic + text + send
+// Composer pill — mic + text + [send|stop]. Streaming state = subtle
+// traveling border + Stop button in place of Send. No separate "thinking"
+// surface: this IS the thinking surface while a turn is in flight.
+//
+// The X button is context-aware:
+//   - draft non-empty  → clear the draft
+//   - draft empty + output on screen → clear the output (keep session)
+//   - neither          → hidden
+// Hard close (minimize to orb) lives in the TopBar, not here.
 // ---------------------------------------------------------------------
 
 type ComposerProps = {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
+  onStop: () => void;
   onMic: () => void;
+  onClearOutput: () => void;
+  hasOutput: boolean;
+  streaming: boolean;
   placeholder: string;
   providerLabel: string | null;
-  onClose: () => void;
 };
 
 const FloatingComposer = forwardRef<HTMLTextAreaElement, ComposerProps>(
   function FloatingComposer(
-    { value, onChange, onSend, onMic, placeholder, providerLabel, onClose },
+    {
+      value,
+      onChange,
+      onSend,
+      onStop,
+      onMic,
+      onClearOutput,
+      hasOutput,
+      streaming,
+      placeholder,
+      providerLabel,
+    },
     ref,
   ) {
+    const hasDraft = !!value.trim();
+    const showClear = hasDraft || hasOutput;
+
     return (
-      <div className="pop-in glass flex w-full items-end gap-1.5 rounded-[22px] pl-2 pr-1.5 py-1.5">
-        <button
+      <div
+        className={
+          "glass flex w-full items-end gap-1.5 rounded-[22px] pl-2 pr-1.5 py-1.5 " +
+          (streaming ? "glance-streaming-border" : "")
+        }
+      >
+        <motion.button
           onClick={onMic}
           aria-label="Voice input"
           title="Voice input (coming soon)"
+          whileHover={{ scale: 1.08 }}
+          whileTap={{ scale: 0.9 }}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-300 transition hover:bg-white/5 hover:text-emerald-200"
         >
           <MicIcon />
-        </button>
+        </motion.button>
         <textarea
           ref={ref}
           value={value}
           rows={1}
+          disabled={streaming}
           onChange={(e) => onChange(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              onSend();
+              if (!streaming) onSend();
             }
           }}
           placeholder={placeholder}
-          className="max-h-32 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[14px] text-slate-100 outline-none placeholder:text-slate-500"
+          className="max-h-32 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[14px] text-slate-100 outline-none placeholder:text-slate-500 disabled:cursor-not-allowed disabled:text-slate-300/70"
         />
         <div className="flex flex-col items-end gap-0.5">
           {providerLabel ? (
@@ -846,28 +1298,52 @@ const FloatingComposer = forwardRef<HTMLTextAreaElement, ComposerProps>(
             </div>
           ) : null}
           <div className="flex items-center gap-1">
-            <button
+            <motion.button
               onClick={() => window.deepFocus?.settings?.open?.()}
               aria-label="Settings"
+              whileHover={{ scale: 1.08, rotate: 12 }}
+              whileTap={{ scale: 0.92, rotate: -6 }}
               className="flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-white/5 hover:text-slate-200"
             >
               <GearIcon />
-            </button>
-            <button
-              onClick={onClose}
-              aria-label="Collapse"
-              className="flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-white/5 hover:text-slate-200"
-            >
-              <CloseIcon />
-            </button>
-            <button
-              onClick={onSend}
-              aria-label="Send"
-              disabled={!value.trim()}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-slate-950 transition enabled:hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-slate-500"
-            >
-              <SendIcon />
-            </button>
+            </motion.button>
+            {showClear ? (
+              <motion.button
+                onClick={() => (hasDraft ? onChange("") : onClearOutput())}
+                aria-label={hasDraft ? "Clear text" : "Clear answer"}
+                title={hasDraft ? "Clear text" : "Clear answer"}
+                whileHover={{ scale: 1.08 }}
+                whileTap={{ scale: 0.9 }}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-white/10 hover:text-slate-100"
+              >
+                <CloseIcon />
+              </motion.button>
+            ) : null}
+            {streaming ? (
+              <motion.button
+                onClick={onStop}
+                aria-label="Stop"
+                title="Stop (Esc)"
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                transition={SPRING_BOUNCY}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-500/90 text-white transition hover:bg-rose-400"
+              >
+                <StopIcon />
+              </motion.button>
+            ) : (
+              <motion.button
+                onClick={onSend}
+                aria-label="Send"
+                disabled={!hasDraft}
+                whileHover={hasDraft ? { scale: 1.1, x: 1 } : undefined}
+                whileTap={hasDraft ? { scale: 0.9 } : undefined}
+                transition={SPRING_BOUNCY}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-slate-950 transition enabled:hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-slate-500"
+              >
+                <SendIcon />
+              </motion.button>
+            )}
           </div>
         </div>
       </div>
