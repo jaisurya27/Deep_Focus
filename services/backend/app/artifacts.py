@@ -307,28 +307,27 @@ ACTIONS: dict[str, ActionSpec] = {
         id="rewrite",
         category="act",
         label="Rewrite",
-        blurb="Generate formal / casual / shorter / friendlier variants.",
+        blurb="Rewrite the captured text in a single chosen tone.",
         system_prompt=_json_contract(
-            """{
+            """Rewrite the captured text in the SINGLE tone the user asked for
+(look at the user instruction — e.g. "formal", "casual", "shorter",
+"friendlier", "simpler", "more concise"). Default to "neutral" if no
+explicit tone is given. Return ONE rewrite only — never multiple
+variants. Preserve meaning; do not add new claims.
+
+Shape:
+{
   "kind": "rewrite",
-  "original": "source text",
-  "variants": [
-    {"tone": "formal", "text": "…"},
-    {"tone": "casual", "text": "…"},
-    {"tone": "shorter", "text": "…"},
-    {"tone": "friendlier", "text": "…"}
-  ]
+  "original": "source text (verbatim, may be truncated)",
+  "tone": "the tone you used (one word, lowercase)",
+  "text": "the rewritten passage"
 }"""
         ),
         mock=lambda t: {
             "kind": "rewrite",
             "original": t or "",
-            "variants": [
-                {"tone": "formal", "text": "[mock] A formal rewrite."},
-                {"tone": "casual", "text": "[mock] A casual rewrite."},
-                {"tone": "shorter", "text": "[mock] Terser."},
-                {"tone": "friendlier", "text": "[mock] Warmer."},
-            ],
+            "tone": "neutral",
+            "text": "[mock] A neutral rewrite of the captured passage.",
         },
     ),
     "tasks_to_calendar": ActionSpec(
@@ -893,6 +892,39 @@ ACTIONS: dict[str, ActionSpec] = {
             ],
             "instacart_query": t or "chocolate lava cake ingredients",
             "walmart_grocery_query": t or "chocolate lava cake ingredients",
+        },
+    ),
+    # --- Create -----------------------------------------------------------
+    "generate_image": ActionSpec(
+        id="generate_image",
+        category="create",
+        label="Generate image",
+        blurb="Create a visual from the user's description or selected context.",
+        needs_text=False,
+        system_prompt=(
+            "You are Glance's image-generation planner. The user wants to CREATE "
+            "or VISUALIZE something as an image. Using the captured text, "
+            "session context, and any user instruction as inspiration, write "
+            "the BEST possible image-generation prompt for a diffusion model.\n\n"
+            "Rules:\n"
+            "- Describe the subject, style, lighting, perspective, and mood.\n"
+            "- Keep the prompt under 300 words — dense and concrete beats vague.\n"
+            "- Incorporate specific details from the captured text / history "
+            "  (names, numbers, colours, relationships) so the image is "
+            "  directly relevant to what the user asked about.\n"
+            "- Never include people's real names or sensitive personal data.\n\n"
+            "Respond with ONLY a JSON object, no prose, no code fences:\n"
+            "{\n"
+            '  "kind": "generate_image",\n'
+            '  "title": "short human-readable title (≤ 8 words)",\n'
+            '  "prompt": "the full image-generation prompt"\n'
+            "}"
+        ),
+        mock=lambda t: {
+            "kind": "generate_image",
+            "title": "Mock visualization",
+            "prompt": f"A vivid illustration of: {t or 'the captured context'}",
+            "data_url": None,
         },
     ),
 }

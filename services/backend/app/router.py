@@ -76,6 +76,8 @@ def _router_system_prompt(catalog: list[dict]) -> str:
         "   'summarize', 'translate', 'rewrite', 'fix', 'solve', 'reply', etc., "
         "   honour that intent and pick the matching action — even if an image "
         "   is also present. Never let the image override a clear instruction.\n"
+        "   If the user says 'generate image', 'visualize', 'draw', 'illustrate', "
+        "   'show me what X looks like', or similar — pick `generate_image`.\n"
         "2. SELECTED TEXT IS PRIMARY CONTEXT. When captured text is present "
         "   alongside an image, the text is what the user highlighted — treat "
         "   it as the main subject. The image is ambient background context.\n"
@@ -104,6 +106,23 @@ async def route_action(
     window_context: dict | None,
 ) -> dict[str, Any]:
     """Return `{action, alternatives, reason}` for the given context."""
+    # Hard pre-LLM overrides — user intent in the instruction beats captured
+    # content signals entirely. Check diagram intent BEFORE image-gen because
+    # some image-gen patterns (e.g. "draw a flowchart") overlap.
+    instr_lower = (user_instruction or "").lower().strip()
+    if instr_lower and _DIAGRAM_RE.search(instr_lower):
+        return {
+            "action": "diagram_to_mermaid",
+            "alternatives": [{"id": "generate_image", "reason": "AI-generated picture instead"}],
+            "reason": "User asked to visualize or diagram the content.",
+        }
+    if instr_lower and _IMAGE_GEN_RE.search(instr_lower):
+        return {
+            "action": "generate_image",
+            "alternatives": [{"id": "diagram_to_mermaid", "reason": "Structured diagram instead"}],
+            "reason": "User explicitly asked to generate an image.",
+        }
+
     catalog = _catalog_for_prompt(has_image=has_image)
     sys_prompt = _router_system_prompt(catalog)
 
@@ -225,6 +244,28 @@ _CODEY_APPS = re.compile(
 # screen right now" — user is clearly asking about visible content but we
 # don't have an image yet. The router emits `needs_context` so the client
 # auto-captures a screenshot and retries.
+_DIAGRAM_RE = re.compile(
+    r"\b("
+    r"visuali[sz]e|flowchart|flow\s+chart|diagram|mermaid|concept\s+map|"
+    r"mind\s+map|sequence\s+diagram|graph\s+(this|it|out)|map\s+(this|it|out)|"
+    r"show\s+(the\s+)?flow|draw\s+(a\s+)?(flowchart|diagram|graph|chart|map)"
+    r")\b",
+    re.I,
+)
+
+_IMAGE_GEN_RE = re.compile(
+    r"\b("
+    r"generate\s+(an?\s+)?image|create\s+(an?\s+)?image|make\s+(an?\s+)?image|"
+    r"draw\s+(me\s+(an?\s+)?|an?\s+|a\s+picture\s+of\s+)|"
+    r"show\s+me\s+(an?\s+)?(image|picture|illustration|photo|visual)|"
+    r"render\s+(an?\s+|this\s+as\s+(an?\s+)?)?image|"
+    r"paint\s+(me\s+|an?\s+)?|illustrate\s+(this|it|me)|"
+    r"what\s+(would|does)\s+.{1,40}\s+look\s+like|"
+    r"picture\s+(of|this)|image\s+(of|for\s+this)"
+    r")\b",
+    re.I,
+)
+
 _VISUAL_INTENT_RE = re.compile(
     r"\b("
     r"what\s+am\s+i\s+(looking|seeing|viewing)\s+at|"
@@ -272,6 +313,13 @@ def _heuristic_route(
             ["answer"],
             "Asking about the screen — need a screenshot to answer.",
         )
+
+    # Diagram/flowchart intent wins before image-gen (overlapping vocabulary).
+    if _DIAGRAM_RE.search(instr):
+        return pick("diagram_to_mermaid", ["generate_image"], "User wants a diagram or flowchart.")
+    # AI image generation intent.
+    if _IMAGE_GEN_RE.search(instr):
+        return pick("generate_image", ["diagram_to_mermaid"], "User wants to generate an image.")
 
     # Explicit user instruction wins.
     if "translate" in instr:

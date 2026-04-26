@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.artifacts import ACTIONS, list_actions, mock_artifact
-from app.providers import get_chat_provider, get_vision_provider
+from app.providers import get_chat_provider, get_image_provider, get_vision_provider
 from app.router import route_action
 from app.store.memory import Exchange, store
 
@@ -265,6 +265,25 @@ async def _artifact_event_stream(
             }
 
     data.setdefault("kind", chosen_action)
+
+    # Two-step image generation: the first LLM call produced a refined prompt;
+    # now call the image provider to turn that prompt into an actual image.
+    if data.get("kind") == "generate_image" and data.get("prompt"):
+        img_prompt = data["prompt"]
+        try:
+            img_provider = get_image_provider()
+            if img_provider.name != "mock":
+                yield {
+                    "event": "progress",
+                    "data": json.dumps({"chars": -1, "status": "Generating image…"}),
+                }
+                img_result = await img_provider.generate(img_prompt)
+                data["data_url"] = img_result.get("data_url") or img_result.get("url")
+                data["image_provider"] = img_result.get("provider", img_provider.name)
+                data["image_model"] = img_result.get("model", img_provider.model)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("image generation failed: %s", exc)
+            data["error"] = f"Image generation failed: {exc}"
 
     # Merge routing alternatives into the artifact's `suggested_alternatives`
     # so the UI can offer "try X instead" chips even in auto mode. The model's

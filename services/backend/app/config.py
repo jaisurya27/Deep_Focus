@@ -58,7 +58,7 @@ def get_settings() -> Settings:
         xai_model=_env("XAI_MODEL", "grok-4-fast-reasoning") or "grok-4-fast-reasoning",
         xai_vision_model=_env("XAI_VISION_MODEL", "grok-2-vision-latest")
         or "grok-2-vision-latest",
-        xai_image_model=_env("XAI_IMAGE_MODEL", "grok-2-image") or "grok-2-image",
+        xai_image_model=_env("XAI_IMAGE_MODEL", "grok-2-image-1212") or "grok-2-image-1212",
         openai_api_key=_env("OPENAI_API_KEY"),
         openai_base_url=_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
         or "https://api.openai.com/v1",

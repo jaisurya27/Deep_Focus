@@ -1,4 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BlockMath, InlineMath } from "react-katex";
+import "katex/dist/katex.min.css";
+import mermaid from "mermaid";
+
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "dark",
+  securityLevel: "loose",
+  fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+});
 
 import type {
   AnswerArtifact,
@@ -13,6 +23,7 @@ import type {
   FixCodeArtifact,
   FlightTrackArtifact,
   FoodOrderArtifact,
+  GenerateImageArtifact,
   GenericArtifact,
   GroceryListArtifact,
   IdentifyArtifact,
@@ -93,6 +104,8 @@ export function ArtifactCard({ artifact }: { artifact: Artifact }) {
       return <JobApplyCard a={artifact as JobApplyArtifact} />;
     case "grocery_list":
       return <GroceryListCard a={artifact as GroceryListArtifact} />;
+    case "generate_image":
+      return <GenerateImageCard a={artifact as GenerateImageArtifact} />;
     default:
       return <GenericCard a={artifact as GenericArtifact} />;
   }
@@ -163,7 +176,7 @@ function Card({
   actions,
 }: {
   title: string;
-  subtitle?: string | null;
+  subtitle?: React.ReactNode | null;
   tone?: "neutral" | "success" | "warn" | "info";
   children: React.ReactNode;
   actions?: React.ReactNode;
@@ -301,18 +314,82 @@ function TranslateCard({ a }: { a: TranslateArtifact }) {
   );
 }
 
-function SolveMathCard({ a }: { a: SolveMathArtifact }) {
+// Heuristic: does this string look like it contains LaTeX worth rendering?
+// We catch both fenced ($...$, $$...$$, \(...\), \[...\]) and bare TeX
+// commands (\frac, \sqrt, ^{...}, _{...}) since the model emits both.
+const TEX_TOKEN_RE = /\\(?:frac|sqrt|sum|int|lim|prod|cdot|times|pm|leq|geq|neq|approx|infty|alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|phi|omega)\b|\^\{|_\{|\$\$?|\\\(|\\\[/;
+function looksLikeTex(s: string): boolean {
+  return TEX_TOKEN_RE.test(s);
+}
+
+// Strip the outer "y' = " etc. that some prompts pre-render and isolate the
+// expression so KaTeX gets a clean bare-TeX input. We also strip a leading
+// "= " since SolveMathCard already prefixes one in the answer pill.
+function stripLeadingEquals(s: string): string {
+  return s.replace(/^\s*=\s*/, "").trim();
+}
+
+function MathInline({ children }: { children: string }) {
+  if (!children) return null;
+  if (!looksLikeTex(children)) return <>{children}</>;
+  // Render the whole thing as a single inline math node. If it parses, KaTeX
+  // shows the formatted formula; if not, fall back to the raw string so the
+  // user at least sees the LaTeX source instead of a stack trace.
+  try {
+    return <InlineMath math={children} />;
+  } catch {
+    return <span className="font-mono">{children}</span>;
+  }
+}
+
+// For step text that mixes prose and TeX ("dy/du = 1/(2\sqrt{u}) by chain
+// rule.") — split on $...$ and \(...\) inline delimiters; otherwise render
+// the whole string as a single inline-math node if it has TeX tokens, else
+// plain text. This keeps both pure-LaTeX steps and mixed prose readable.
+function MathText({ children }: { children: string }) {
+  if (!children) return null;
+  const parts: Array<{ kind: "text" | "math"; value: string }> = [];
+  const re = /\$\$([^$]+)\$\$|\$([^$]+)\$|\\\(([^)]+)\\\)|\\\[([^\]]+)\\\]/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(children))) {
+    if (m.index > last) parts.push({ kind: "text", value: children.slice(last, m.index) });
+    parts.push({ kind: "math", value: (m[1] ?? m[2] ?? m[3] ?? m[4] ?? "").trim() });
+    last = re.lastIndex;
+  }
+  if (parts.length === 0) {
+    // No fenced math — if the whole string smells like TeX, render it as math.
+    return looksLikeTex(children) ? <MathInline>{children}</MathInline> : <>{children}</>;
+  }
+  if (last < children.length) parts.push({ kind: "text", value: children.slice(last) });
   return (
-    <Card title="Solve" subtitle={a.problem} tone="info">
-      {a.answer ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 font-mono text-[14px] text-emerald-200">
-          = {a.answer}
+    <>
+      {parts.map((p, i) =>
+        p.kind === "math" ? <MathInline key={i}>{p.value}</MathInline> : <span key={i}>{p.value}</span>,
+      )}
+    </>
+  );
+}
+
+function SolveMathCard({ a }: { a: SolveMathArtifact }) {
+  const answer = a.answer ? stripLeadingEquals(a.answer) : "";
+  return (
+    <Card title="Solve" subtitle={a.problem ? <MathText>{a.problem}</MathText> : undefined} tone="info">
+      {answer ? (
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[14px] text-emerald-100 overflow-x-auto">
+          {looksLikeTex(answer) ? (
+            <BlockMath math={answer} />
+          ) : (
+            <span className="font-mono">= {answer}</span>
+          )}
         </div>
       ) : null}
       {a.steps?.length ? (
-        <ol className="ml-5 list-decimal space-y-1 text-[13px] text-slate-200 marker:text-emerald-400/60">
+        <ol className="ml-5 list-decimal space-y-1.5 text-[13px] leading-relaxed text-slate-200 marker:text-emerald-400/60">
           {a.steps.map((s, i) => (
-            <li key={i}>{s}</li>
+            <li key={i}>
+              <MathText>{s}</MathText>
+            </li>
           ))}
         </ol>
       ) : null}
@@ -481,24 +558,25 @@ function IdentifyCard({ a }: { a: IdentifyArtifact }) {
 // --- Act -----------------------------------------------------------------
 
 function RewriteCard({ a }: { a: RewriteArtifact }) {
+  const text = a.text?.trim() ?? "";
   return (
-    <Card title="Rewrite" tone="info">
-      <div className="flex flex-col gap-2">
-        {a.variants?.map((v, i) => (
-          <div
-            key={i}
-            className="rounded-lg border border-slate-800 bg-slate-950/40 p-2.5"
-          >
-            <div className="mb-1 flex items-center justify-between">
-              <Pill tone="emerald">{v.tone}</Pill>
-              <CopyButton text={v.text} />
-            </div>
-            <div className="text-[13px] leading-relaxed text-slate-200">
-              {v.text}
-            </div>
-          </div>
-        ))}
-      </div>
+    <Card
+      title="Rewrite"
+      tone="info"
+      actions={
+        <div className="flex items-center gap-2">
+          {a.tone ? <Pill tone="emerald">{a.tone}</Pill> : null}
+          {text ? <CopyButton text={text} /> : null}
+        </div>
+      }
+    >
+      {text ? (
+        <div className="text-[13px] leading-relaxed text-slate-100 whitespace-pre-wrap">
+          {text}
+        </div>
+      ) : (
+        <div className="text-[12px] text-slate-400">No rewrite returned.</div>
+      )}
     </Card>
   );
 }
@@ -598,15 +676,133 @@ function DraftReplyCard({ a }: { a: DraftReplyArtifact }) {
   );
 }
 
+function MermaidDiagram({ source }: { source: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const idRef = useRef(`mermaid-${Math.random().toString(36).slice(2, 10)}`);
+
+  useEffect(() => {
+    let cancelled = false;
+    const el = ref.current;
+    if (!el || !source.trim()) return;
+    setError(null);
+    el.innerHTML = "";
+    mermaid
+      .render(idRef.current, source)
+      .then(({ svg }) => {
+        if (cancelled || !ref.current) return;
+        ref.current.innerHTML = svg;
+        const svgEl = ref.current.querySelector("svg");
+        if (svgEl) {
+          svgEl.setAttribute("width", "100%");
+          svgEl.removeAttribute("height");
+          svgEl.style.maxWidth = "100%";
+          svgEl.style.height = "auto";
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-[12px] text-rose-200">
+        Could not render diagram: {error}
+      </div>
+    );
+  }
+  return (
+    <div
+      ref={ref}
+      className="overflow-auto rounded-lg border border-emerald-500/20 bg-slate-950/40 p-3"
+    />
+  );
+}
+
 function DiagramMermaidCard({ a }: { a: DiagramMermaidArtifact }) {
+  const [showSource, setShowSource] = useState(false);
   return (
     <Card
       title="Diagram → Mermaid"
       tone="info"
-      actions={a.mermaid ? <CopyButton text={a.mermaid} /> : undefined}
+      actions={
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowSource((s) => !s)}
+            className="rounded-full border border-emerald-500/30 px-2 py-[2px] text-[10px] font-mono uppercase tracking-wider text-emerald-200 hover:bg-emerald-500/15"
+          >
+            {showSource ? "Diagram" : "Source"}
+          </button>
+          {a.mermaid ? <CopyButton text={a.mermaid} /> : null}
+        </div>
+      }
     >
-      {a.mermaid ? <CodeBlock code={a.mermaid} lang="mermaid" /> : null}
+      {a.mermaid ? (
+        showSource ? (
+          <CodeBlock code={a.mermaid} lang="mermaid" />
+        ) : (
+          <MermaidDiagram source={a.mermaid} />
+        )
+      ) : null}
       {a.notes?.length ? <Bullets items={a.notes} /> : null}
+    </Card>
+  );
+}
+
+// --- Create --------------------------------------------------------------
+
+function GenerateImageCard({ a }: { a: GenerateImageArtifact }) {
+  const [showPrompt, setShowPrompt] = useState(false);
+  const hasImage = !!a.data_url;
+  const hasError = !!a.error;
+  return (
+    <Card
+      title={`Image${a.image_model ? ` · ${a.image_model}` : ""}`}
+      subtitle={a.title ?? null}
+      tone="info"
+      actions={
+        <div className="flex items-center gap-2">
+          {a.prompt ? (
+            <button
+              type="button"
+              onClick={() => setShowPrompt((s) => !s)}
+              className="rounded-full border border-emerald-500/30 px-2 py-[2px] text-[10px] font-mono uppercase tracking-wider text-emerald-200 hover:bg-emerald-500/15"
+            >
+              {showPrompt ? "Image" : "Prompt"}
+            </button>
+          ) : null}
+          {a.data_url ? <CopyButton text={a.data_url} label="Copy URL" /> : null}
+        </div>
+      }
+    >
+      {hasError ? (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-[12px] text-rose-200">
+          {a.error}
+        </div>
+      ) : !hasImage ? (
+        <div className="flex items-center justify-center rounded-lg border border-emerald-500/20 bg-slate-950/40 p-8 text-[12px] text-slate-400">
+          {a.prompt ? "Image generation requires an image provider key (OpenAI or xAI)." : "No image returned."}
+        </div>
+      ) : showPrompt ? (
+        <div className="rounded-lg bg-slate-950/60 p-3 text-[12px] leading-relaxed text-slate-300 whitespace-pre-wrap">
+          {a.prompt}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-emerald-500/20">
+          <img
+            src={a.data_url!}
+            alt={a.title ?? "Generated image"}
+            className="w-full object-contain"
+            style={{ maxHeight: "480px" }}
+          />
+        </div>
+      )}
     </Card>
   );
 }

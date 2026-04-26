@@ -36,19 +36,32 @@ function schedulePositionSave(x: number, y: number) {
 }
 
 function clampToDisplay(x: number, y: number, w: number, h: number) {
-  // Keep at least 40px of the window on-screen after display changes or
-  // multi-monitor reshuffles so a saved offscreen position can't leave the
-  // orb stranded outside any display.
+  // Keep the WHOLE window inside the work area of the nearest display so a
+  // saved or in-progress drag position can never leave the orb stranded
+  // partially or fully off-screen.
   const nearest = screen.getDisplayNearestPoint({ x: x + w / 2, y: y + h / 2 });
   const wa = nearest.workArea;
-  const minX = wa.x - w + 40;
-  const maxX = wa.x + wa.width - 40;
-  const minY = wa.y - h + 40;
-  const maxY = wa.y + wa.height - 40;
+  const minX = wa.x;
+  const maxX = wa.x + wa.width - w;
+  const minY = wa.y;
+  const maxY = wa.y + wa.height - h;
   return {
     x: Math.min(maxX, Math.max(minX, x)),
     y: Math.min(maxY, Math.max(minY, y)),
   };
+}
+
+function isFullyOnScreen(x: number, y: number, w: number, h: number) {
+  const displays = screen.getAllDisplays();
+  return displays.some((d) => {
+    const wa = d.workArea;
+    return (
+      x >= wa.x &&
+      y >= wa.y &&
+      x + w <= wa.x + wa.width &&
+      y + h <= wa.y + wa.height
+    );
+  });
 }
 
 /** Bottom-right of a display's work area (orb dock position). */
@@ -148,23 +161,16 @@ export async function createPanelWindow(): Promise<BrowserWindow> {
     panel = null;
   });
 
-  // Restore saved position if we have one. A legacy (0,0) save was written when
-  // the window was never given explicit x,y — treat that as "no real position"
-  // and dock to the main screen bottom-right instead.
-  const saved = getSettings().panelPosition;
-  if (saved) {
-    const [w, h] = panel.getSize();
-    const atOrigin = Math.abs(saved.x) < 3 && Math.abs(saved.y) < 3;
-    if (atOrigin) {
-      const p = initialOrbPosition(w, h);
-      panel.setPosition(p.x, p.y);
-      setSettings({ panelPosition: { x: p.x, y: p.y } });
-    } else {
-      const clamped = clampToDisplay(saved.x, saved.y, w, h);
-      panel.setPosition(clamped.x, clamped.y);
-    }
-    userRepositioned = true;
-  }
+  // Always dock to the primary display's bottom-right on startup. Any saved
+  // position from a previous session is overwritten — the user can still
+  // drag mid-session, and that drag is persisted, but every fresh launch
+  // begins anchored bottom-right so the orb can't appear stranded after a
+  // monitor change, a (0,0) legacy save, or a stale off-screen position.
+  const [w, h] = panel.getSize();
+  const p = initialOrbPosition(w, h);
+  panel.setPosition(p.x, p.y);
+  setSettings({ panelPosition: { x: p.x, y: p.y } });
+  userRepositioned = true;
 
   panel.on("blur", () => {
     // Intentionally leave the panel visible on blur — users want it to stay
