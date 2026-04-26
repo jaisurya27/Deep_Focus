@@ -30,7 +30,7 @@ agent = Agent(
     name="GlanceConnectAgent",
     seed=CONNECT_AGENT_SEED,
     port=CONNECT_AGENT_PORT,
-    endpoint=[f"http://127.0.0.1:{CONNECT_AGENT_PORT}/submit"],
+    mailbox=True,
     network="testnet",
 )
 

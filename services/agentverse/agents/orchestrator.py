@@ -66,7 +66,6 @@ agent = Agent(
     name="GlanceOrchestrator",
     seed=ORCHESTRATOR_SEED,
     port=ORCHESTRATOR_PORT,
-    endpoint=[f"http://127.0.0.1:{ORCHESTRATOR_PORT}/submit"],
     mailbox=True,
     publish_agent_details=True,
     network="testnet",

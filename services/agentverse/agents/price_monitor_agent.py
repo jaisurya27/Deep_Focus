@@ -49,7 +49,6 @@ agent = Agent(
     name="GlancePriceMonitor",
     seed=PRICE_MONITOR_SEED,
     port=PRICE_MONITOR_PORT,
-    endpoint=[f"http://127.0.0.1:{PRICE_MONITOR_PORT}/submit"],
     mailbox=True,
     publish_agent_details=True,
     network="testnet",

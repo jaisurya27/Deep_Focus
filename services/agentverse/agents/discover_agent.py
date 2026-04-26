@@ -40,7 +40,6 @@ agent = Agent(
     name="GlanceDiscoverAgent",
     seed=DISCOVER_AGENT_SEED,
     port=DISCOVER_AGENT_PORT,
-    endpoint=[f"http://127.0.0.1:{DISCOVER_AGENT_PORT}/submit"],
     mailbox=True,
     publish_agent_details=True,
     network="testnet",

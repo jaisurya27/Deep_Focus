@@ -40,7 +40,6 @@ agent = Agent(
     name="GlanceCodeAgent",
     seed=CODE_AGENT_SEED,
     port=CODE_AGENT_PORT,
-    endpoint=[f"http://127.0.0.1:{CODE_AGENT_PORT}/submit"],
     mailbox=True,
     publish_agent_details=True,
     network="testnet",
