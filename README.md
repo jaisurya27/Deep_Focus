@@ -2,7 +2,7 @@
 
 > A menu-bar personal agent that clears your doubts about anything on your screen — browser tabs, PDFs, code, papers, anywhere. Hit a hotkey, point at what's confusing, get a streaming answer with follow-up chat.
 
-Phases 1–4 are live. Three hotkeys, three flows, follow-up chat, presets, region capture with vision, session history, and a settings window. Everything runs locally against a FastAPI sidecar; model calls go directly from that sidecar to xAI Grok (primary) or OpenAI (fallback).
+Phases 1–4 are live, plus full-screen ambient vision on every message. Three hotkeys, three flows, follow-up chat, presets, region capture, session history, and a settings window. Everything runs locally against a FastAPI sidecar; model calls go from that sidecar to xAI Grok (primary) or OpenAI (fallback).
 
 ## Repo layout
 
@@ -11,7 +11,7 @@ Deep_Focus/
 ├─ apps/
 │  └─ desktop/                  Electron shell + React panel
 │     ├─ src/main/              Tray, hotkeys, IPC, windows
-│     │  ├─ capture/            Selected-text fetch + region-capture overlay
+│     │  ├─ capture/            Selected-text · region-capture · fullscreen ambient
 │     │  ├─ context/            Active-window introspection (no native deps)
 │     │  └─ windows/            panel / overlay / history / settings windows
 │     ├─ src/preload/           contextBridge between main and renderer
@@ -88,15 +88,15 @@ Rebinding is available in **Settings → Shortcuts**.
 - Five preset chips below the composer: **Simplify · Analogy · Visual metaphor · Fun facts · Intuition**. Clicking a chip regenerates the last turn with that system-prompt template. `Cmd+1..5` from the keyboard.
 
 ### Phase 3 — Region capture + vision
-- `Cmd/Ctrl+Shift+S` opens a fullscreen transparent overlay on **every** display (Retina-aware, scaled correctly). Drag a rectangle to select.
+- `Cmd+Ctrl+S` opens a fullscreen transparent overlay on **every** display (Retina-aware, scaled correctly). Drag a rectangle to select.
 - The region is captured via `desktopCapturer` + `nativeImage.crop`, downscaled if large, and becomes the attached image for the next message.
-- Vision requests go to `POST /chat/vision` (OpenAI-compatible multimodal payload) — `grok-2-vision-latest` by default, with `gpt-4o` as an automatic fallback.
-- The **Visual metaphor** preset switches to `POST /image` and streams the generated image inline (xAI Imagine → `gpt-image-1.5` fallback).
+- Vision requests go to `POST /chat/vision` — `grok-2-vision-latest` by default, `gpt-4o` as automatic fallback.
+- The **Visual metaphor** preset switches to `POST /image` and streams the generated image inline (`gpt-image-1.5` → xAI Imagine fallback).
 - Cropped thumbnails appear in the panel header; click to expand.
 
 ### Phase 4 — Polish, memory, history
 - In-memory session store that auto-purges anything older than 14 days on every backend boot.
-- Active-window context (foreground app + title + URL for browsers) is attached as a system hint, so "this" and "here" resolve meaningfully. Implemented with pure shell-outs — no native Node modules, so no build-time `node-gyp` pain.
+- **Ambient full-screen vision** — before every chat turn the app silently captures the display, fades the Deep Focus panel to invisible for ~50 ms (so it doesn't appear in the frame), and attaches the screenshot to the message. The model sees what you actually see — charts, code, PDFs, UI state — not just a window title. Falls back to text-only if Screen Recording permission is absent.
 - **Session history** window (tray → *Session history*): searchable list of past sessions with the source text preserved alongside the conversation.
 - **Settings** window (tray → *Settings*): rebind hotkeys, paste API keys (encrypted at rest via Electron `safeStorage`), toggle launch-on-startup, clear all history, check provider health.
 - First-launch welcome card with a quick hotkey tour.
@@ -113,12 +113,12 @@ pnpm dev:desktop
 # Type-check the desktop app
 pnpm --filter @deep-focus/desktop typecheck
 
-# Smoke test: streams an SSE response
+# Smoke test text chat
 curl -N -X POST http://127.0.0.1:8765/chat \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"what is a monad?"}],"preset":"analogy"}'
 
-# Smoke test vision (any tiny base64 PNG works)
+# Smoke test vision
 curl -N -X POST http://127.0.0.1:8765/chat/vision \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"what is this?"}],"image_data_url":"data:image/png;base64,iVBORw0KGgo="}'
@@ -133,14 +133,15 @@ Force mock mode (no API keys needed) by exporting `CHAT_PROVIDER=mock`, `VISION_
 
 ## Roadmap
 
-- Phase 5 — Focus mode (optional webcam-based attention nudge).
-- Phase 6 — Browser extension for first-class page context.
+- Phase 5 — Artifact rendering (Mermaid diagrams, flowcharts, live charts).
+- Phase 6 — Focus mode (optional webcam-based attention nudge).
+- Phase 7 — Browser extension for first-class page context.
 - Swap the in-memory store for SQLite so sessions survive backend restarts.
 
 ## Notes / caveats
 
 - **`ELECTRON_RUN_AS_NODE`** — if you run `pnpm dev` from a Cursor/VS Code integrated terminal, Electron may inherit this env var and refuse to start a full GUI. The `pnpm dev:desktop` script clears it via `cross-env`; if you invoke Vite/Electron manually, either `unset ELECTRON_RUN_AS_NODE` first or use a plain system terminal.
-- **macOS permissions** — the first time you use `Cmd+Shift+I` macOS will ask for **Accessibility** (to synthesize the copy keystroke), and `Cmd+Shift+S` will ask for **Screen Recording**. One-time prompts.
+- **macOS permissions** — the first hotkey press triggers an **Accessibility** prompt (to synthesize the copy keystroke); `Cmd+Ctrl+S` triggers a **Screen Recording** prompt. Both are one-time. The full-screen ambient capture also needs Screen Recording; it silently falls back to text-only if not granted.
 - **API keys never leave the sidecar.** The renderer only speaks to `127.0.0.1:8765`. Keys live either in `services/backend/.env` (gitignored) or — for per-user keys set in the Settings window — in Electron `safeStorage`, which is OS-keychain-backed.
 - **Provider selection.** `CHAT_PROVIDER` / `VISION_PROVIDER` / `IMAGE_PROVIDER` can each be one of `xai | openai | mock`. Set to `xai` (default) and the backend will transparently fall back to OpenAI if the xAI key is missing or the call errors; set to `openai` to force a single backend.
 
