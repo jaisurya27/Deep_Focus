@@ -43,13 +43,22 @@ export function registerHotkeys() {
       return;
     }
 
-    // We do NOT hide the panel here. The AppleScript in triggerCopy explicitly
-    // calls `tell application "<app>" to activate` before sending Cmd+C, so
-    // the target app always gets focus regardless of whether our panel is
-    // visible. Hiding it caused:
-    //   (a) visible flicker on every hotkey press, and
-    //   (b) a race on subsequent presses where macOS would sometimes activate
-    //       a different window after hide(), confusing frontmostAppName().
+    // Brief stealth-hide: macOS won't release the "key window" to Chrome while
+    // our always-on-top Electron window holds focus (the composer focus() call
+    // from a prior open activates it). Without the hide, AppleScript's
+    // "tell Chrome to activate" + Cmd+C fights the existing key window and
+    // the clipboard doesn't change on subsequent presses.
+    //
+    // We use only 50 ms (down from 200 ms) because the AppleScript also
+    // explicitly activates the target app. showPanel() below restores the
+    // window immediately with new content, so the panel is gone for at most
+    // 50 ms — barely perceptible and far less jarring than the old 200 ms.
+    const panel = getPanelWindow();
+    const wasVisible = !!(panel && panel.isVisible());
+    if (wasVisible) {
+      panel!.hide();
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     const [selection, windowContext] = await Promise.all([
       fetchSelectedText().catch((err) => {
