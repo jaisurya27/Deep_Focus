@@ -43,18 +43,13 @@ export function registerHotkeys() {
       return;
     }
 
-    // Always hide the panel before the copy-hop. Even an unfocused
-    // always-on-top window can interfere with macOS's keystroke routing,
-    // and the panel is visible most of the time after the first hotkey press.
-    // We show it back again below (with the selection attached).
-    const panel = getPanelWindow();
-    const wasVisible = !!(panel && panel.isVisible());
-    if (wasVisible) {
-      panel!.hide();
-      // 200 ms gives macOS time to shift the key-window back to whichever app
-      // was behind us. 120 ms was sometimes too short for Chrome.
-      await new Promise((r) => setTimeout(r, 200));
-    }
+    // We do NOT hide the panel here. The AppleScript in triggerCopy explicitly
+    // calls `tell application "<app>" to activate` before sending Cmd+C, so
+    // the target app always gets focus regardless of whether our panel is
+    // visible. Hiding it caused:
+    //   (a) visible flicker on every hotkey press, and
+    //   (b) a race on subsequent presses where macOS would sometimes activate
+    //       a different window after hide(), confusing frontmostAppName().
 
     const [selection, windowContext] = await Promise.all([
       fetchSelectedText().catch((err) => {

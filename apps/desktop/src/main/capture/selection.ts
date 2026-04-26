@@ -90,8 +90,12 @@ async function doFetchSelectedText(): Promise<string | null> {
 
   const frontmost = await frontmostAppName();
   if (frontmost && OWN_APP_NAMES.has(frontmost)) {
+    // Our own panel is frontmost. This happens when the user clicked on the
+    // panel to read a previous result and then pressed the hotkey. We can't
+    // know which app had the selection, so fall back to the empty panel.
+    // (If they had just selected text in Chrome, Chrome would be frontmost.)
     console.info(
-      `[selection] frontmost app is "${frontmost}" (us) — skipping copy-hop.`,
+      `[selection] frontmost app is "${frontmost}" (us) — can't determine selection source.`,
     );
     return null;
   }
