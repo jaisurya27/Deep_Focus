@@ -1,5 +1,6 @@
 import { globalShortcut, screen } from "electron";
 
+import { IPC } from "../shared/ipc";
 import { fetchSelectedText, hasAccessibilityPermission } from "./capture/selection";
 import { startRegionCapture } from "./capture/region";
 import { getActiveWindowContext } from "./context/active-window";
@@ -84,11 +85,19 @@ export function registerHotkeys() {
     console.info("[hotkeys] togglePanel handler entered");
     const panel = getPanelWindow();
     if (!panel) {
-      showPanel({ mode: "just-ask", explicit: true });
+      showPanel({ mode: "just-ask" });
       return;
     }
-    if (panel.isVisible()) panel.hide();
-    else showPanel({ mode: "just-ask", explicit: true });
+    if (panel.isVisible()) {
+      // Tell the renderer to collapse to orb *before* hiding the window.
+      // This ensures the window comes back as the orb — not the expanded
+      // composer — when the user toggles it on again.
+      panel.webContents.send(IPC.PANEL_MINIMIZE);
+      panel.hide();
+    } else {
+      // Show without explicit so the renderer stays in orb mode.
+      showPanel({ mode: "just-ask" });
+    }
   });
 
   register(hotkeys.regionCapture, async () => {

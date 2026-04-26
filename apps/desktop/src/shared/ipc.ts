@@ -8,6 +8,11 @@ export const IPC = {
   PANEL_OPEN: "panel:open",
   PANEL_CLEAR: "panel:clear",
   PANEL_FOCUS_INPUT: "panel:focus-input",
+  // Tells the renderer to collapse back to orb (abort stream, clear output).
+  // Sent by the main process before it hides the window via the toggle hotkey
+  // so the panel re-appears as the orb — not the expanded composer — on the
+  // next toggle-on press.
+  PANEL_MINIMIZE: "panel:minimize",
   OVERLAY_START: "overlay:start",
   HISTORY_DATA: "history:data",
 

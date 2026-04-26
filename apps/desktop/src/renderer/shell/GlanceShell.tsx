@@ -186,6 +186,14 @@ export function GlanceShell() {
     setPanelNotice(null);
   }, []);
 
+  // Collapse back to orb when the main process requests it (toggle hotkey
+  // hides the window). Ensures the panel re-appears as the orb — not the
+  // expanded composer — when the user toggles it back on.
+  useEffect(() => {
+    const off = window.deepFocus?.panel?.onMinimize?.(() => minimizeShell());
+    return () => { off?.(); };
+  }, [minimizeShell]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
