@@ -64,6 +64,8 @@ export function GlanceShell() {
   const [, setArtifactProgress] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Stable ref so the onOpen effect (empty deps) can always call the latest sendText.
+  const sendTextRef = useRef<((instruction: string) => void) | null>(null);
 
   const lastArtifactMsg = useMemo(
     () =>
@@ -122,6 +124,15 @@ export function GlanceShell() {
         store.setPendingSelection(sel);
         store.setPendingImage(null);
         shouldExpand = !!sel;
+        // Auto-explain: when the user fires the hotkey with selected text,
+        // immediately trigger "Explain this" so they get an instant response
+        // without needing to type anything. A short delay lets the store
+        // settle and the window become visible before the request fires.
+        if (sel && payload.explicit) {
+          setTimeout(() => {
+            sendTextRef.current?.("Explain this");
+          }, 80);
+        }
       } else if (payload.mode === "region") {
         if (payload.imageDataUrl) {
           // New capture → drop prior output so the shell refocuses on this
@@ -349,6 +360,8 @@ export function GlanceShell() {
 
   // Back-compat shim: any legacy caller that used sendText stays working.
   const sendText = runAuto;
+  // Keep the ref in sync so onOpen (empty deps) always holds the current version.
+  sendTextRef.current = sendText;
 
   // --- Run an explicit artifact action (chip click / suggestion) ----
 
