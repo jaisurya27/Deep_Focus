@@ -1,0 +1,19 @@
+{
+  "name": "deep-focus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Deep Focus — Personal on-screen agent that clears doubts from anywhere on your laptop.",
+  "scripts": {
+    "dev": "concurrently -k -n backend,desktop -c blue,magenta \"pnpm dev:backend\" \"pnpm dev:desktop\"",
+    "dev:backend": "lsof -ti :8765 | xargs kill -9 2>/dev/null; cd services/backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload",
+    "dev:desktop": "pnpm --filter @deep-focus/desktop dev",
+    "build:desktop": "pnpm --filter @deep-focus/desktop build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.2"
+}
