@@ -4,6 +4,14 @@ Chronological record of changes on top of the `Refactor: Deep Focus → Glance`
 commit (110830b). When the branch ships, squash or re-organize into a proper
 changelog.
 
+## 2026-04-26 — Documentation: `README.md` + `CLAUDE.md` aligned with Glance
+
+Refreshed root docs to match the current product: Glance shell + `/artifact`
+`action:auto` pipeline, `router.py`, `needs_context`, selection/region/ambient
+behavior, default hotkeys (no legacy Cmd+1–5 preset table), orb bottom-right on
+first launch, removed references to deleted `AnswerPanel`. See `README.md` and
+`CLAUDE.md` for full detail.
+
 ## 2026-04-25 — Image-only capture auto-submit
 
 Region captures (Cmd+Ctrl+S) now auto-submit to `/artifact` immediately after
