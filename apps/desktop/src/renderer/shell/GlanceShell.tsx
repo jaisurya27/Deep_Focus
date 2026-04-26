@@ -228,9 +228,32 @@ export function GlanceShell() {
         messages: wire,
       };
 
+      // Decide which image to send.
+      // 1. Explicit region capture (Cmd+Ctrl+S) wins — user targeted it.
+      // 2. Otherwise take an ambient full-screen snapshot so the model sees
+      //    exactly what's on screen. Falls back to text-only on any failure.
+      let wireImage: string | null = image?.dataUrl ?? null;
+      if (!wireImage) {
+        try {
+          const t0 = performance.now();
+          const cap = await window.deepFocus?.capture?.fullscreen?.();
+          const ms = Math.round(performance.now() - t0);
+          if (cap?.dataUrl) {
+            wireImage = cap.dataUrl;
+            console.info(
+              `[chat] ambient full-screen capture attached (${cap.width}×${cap.height}, ${ms}ms)`,
+            );
+          } else {
+            console.info(`[chat] ambient capture unavailable (${ms}ms) — text-only`);
+          }
+        } catch (err) {
+          console.warn("[chat] ambient capture threw — text-only:", err);
+        }
+      }
+
       try {
-        if (image?.dataUrl) {
-          await streamVision({ ...handlers, imageDataUrl: image.dataUrl });
+        if (wireImage) {
+          await streamVision({ ...handlers, imageDataUrl: wireImage });
         } else {
           await streamChat(handlers);
         }
