@@ -63,12 +63,14 @@ _monitors: dict[str, dict[str, Any]] = {}
 class AgentRequest(BaseModel):
     action: str
     text: str
+    context: str = ""  # prior conversation digest — used for LLM only, never displayed
 
 
 class MonitorRequest(BaseModel):
     text: str          # e.g. "MacBook Pro M3 below $1800"
     product: str       # extracted product name
     target_price: float
+    context: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +87,8 @@ async def run_agent(req: AgentRequest) -> dict:
     prompt = _PROMPTS.get(req.action)
     if not prompt:
         raise HTTPException(status_code=400, detail=f"unknown action: {req.action!r}")
-    data = await call_artifact_llm(prompt, req.text)
+    llm_text = f"{req.context}\n\n{req.text}".strip() if req.context else req.text
+    data = await call_artifact_llm(prompt, llm_text)
     data.setdefault("kind", req.action)
     return {"artifact": data, "via": "fetch_ai_agentverse"}
 
@@ -101,6 +104,8 @@ async def price_compare(req: AgentRequest) -> dict:
     """
     AGENT_FEE_FET = 0.01
 
+    llm_text = f"{req.context}\n\n{req.text}".strip() if req.context else req.text
+
     async def _safe(prompt: str, platform: str, agent_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
         payment = {
             "from": "GlanceOrchestrator",
@@ -110,7 +115,7 @@ async def price_compare(req: AgentRequest) -> dict:
             "for": f"{platform} price data",
         }
         try:
-            result = await call_artifact_llm(prompt, req.text)
+            result = await call_artifact_llm(prompt, llm_text)
             result["platform"] = platform
             return result, payment
         except Exception as exc:
@@ -150,15 +155,18 @@ async def price_compare(req: AgentRequest) -> dict:
 
 class DebateRequest(BaseModel):
     text: str   # the topic or question to debate
+    context: str = ""
 
 
 @app.post("/debate")
 async def debate(req: DebateRequest) -> dict:
     """OptimistAgent + PessimistAgent fire in parallel, SynthesisAgent merges."""
 
+    llm_text = f"{req.context}\n\n{req.text}".strip() if req.context else req.text
+
     async def _safe(prompt: str, agent: str) -> dict[str, Any]:
         try:
-            result = await call_artifact_llm(prompt, req.text)
+            result = await call_artifact_llm(prompt, llm_text)
             result.setdefault("agent", agent)
             return result
         except Exception as exc:

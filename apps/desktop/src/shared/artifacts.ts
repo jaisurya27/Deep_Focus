@@ -75,13 +75,6 @@ export type ExplainChartArtifact = {
   caveats?: string[];
 };
 
-export type CritiqueUiArtifact = {
-  kind: "critique_ui";
-  strengths?: string[];
-  issues?: string[];
-  suggestions?: string[];
-};
-
 export type IdentifyArtifact = {
   kind: "identify";
   name?: string;
@@ -465,7 +458,6 @@ export type Artifact = (
   | FixCodeArtifact
   | DiagnoseErrorArtifact
   | ExplainChartArtifact
-  | CritiqueUiArtifact
   | IdentifyArtifact
   | RewriteArtifact
   | TasksCalendarArtifact

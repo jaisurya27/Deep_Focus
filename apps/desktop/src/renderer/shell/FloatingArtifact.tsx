@@ -171,15 +171,6 @@ function stringify(artifact: Artifact): string {
       return [s("likely_cause"), ...arr("fix_steps")].filter(Boolean).join("\n- ");
     case "explain_chart":
       return [s("headline"), ...arr("key_points")].filter(Boolean).join("\n- ");
-    case "critique_ui":
-      return [
-        "Strengths:",
-        ...arr("strengths"),
-        "Issues:",
-        ...arr("issues"),
-        "Suggestions:",
-        ...arr("suggestions"),
-      ].join("\n");
     case "identify":
       return [s("name"), ...arr("facts")].filter(Boolean).join("\n- ");
     case "rewrite":

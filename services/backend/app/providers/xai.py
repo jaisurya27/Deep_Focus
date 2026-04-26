@@ -7,7 +7,7 @@ from typing import AsyncIterator
 
 import httpx
 
-from ._openai_compat import stream_openai_compatible_chat
+from ._openai_compat import fetch_openai_compatible_chat
 from .base import ChatMessage, GeneratedImage, VisionMessage
 
 
@@ -20,7 +20,7 @@ class XAIProvider:
         self.model = model
 
     async def chat_stream(self, messages: list[ChatMessage]) -> AsyncIterator[str]:
-        async for chunk in stream_openai_compatible_chat(
+        async for chunk in fetch_openai_compatible_chat(
             base_url=self._base_url,
             api_key=self._api_key,
             model=self.model,
@@ -32,7 +32,7 @@ class XAIProvider:
         self, messages: list[ChatMessage]
     ) -> AsyncIterator[str]:
         """Stream a JSON-mode response (guaranteed parseable JSON object)."""
-        async for chunk in stream_openai_compatible_chat(
+        async for chunk in fetch_openai_compatible_chat(
             base_url=self._base_url,
             api_key=self._api_key,
             model=self.model,
@@ -53,7 +53,7 @@ class XAIVisionProvider:
     async def chat_stream_multimodal(
         self, messages: list[VisionMessage]
     ) -> AsyncIterator[str]:
-        async for chunk in stream_openai_compatible_chat(
+        async for chunk in fetch_openai_compatible_chat(
             base_url=self._base_url,
             api_key=self._api_key,
             model=self.model,
@@ -64,7 +64,7 @@ class XAIVisionProvider:
     async def chat_stream_multimodal_json(
         self, messages: list[VisionMessage]
     ) -> AsyncIterator[str]:
-        async for chunk in stream_openai_compatible_chat(
+        async for chunk in fetch_openai_compatible_chat(
             base_url=self._base_url,
             api_key=self._api_key,
             model=self.model,

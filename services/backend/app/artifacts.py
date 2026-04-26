@@ -45,7 +45,7 @@ def _json_contract(shape_doc: str) -> str:
         "array if you're uncertain.\n\n"
         "If the captured content is a MUCH better fit for a different action "
         "from this catalog — translate, solve_math, explain_code, fix_code, "
-        "diagnose_error, explain_chart, critique_ui, identify, rewrite, "
+        "diagnose_error, explain_chart, identify, rewrite, "
         "tasks_to_calendar, draft_reply, diagram_to_mermaid, recipe, product, "
         "media_lookup, travel, answer, map, shopping, food_order, weather, "
         "restaurant_booking, flight_track, email_compose, job_apply, "
@@ -254,29 +254,7 @@ ACTIONS: dict[str, ActionSpec] = {
             "caveats": ["Y-axis doesn't start at zero."],
         },
     ),
-    "critique_ui": ActionSpec(
-        id="critique_ui",
-        category="understand",
-        label="Critique UI",
-        blurb="Strengths, issues, and suggestions for a UI/UX screenshot.",
-        needs_text=False,
-        needs_image=True,
-        system_prompt=_json_contract(
-            """{
-  "kind": "critique_ui",
-  "strengths": ["bullet"],
-  "issues": ["bullet"],
-  "suggestions": ["bullet"]
-}"""
-        ),
-        mock=lambda _t: {
-            "kind": "critique_ui",
-            "strengths": ["Clear hierarchy.", "Readable type."],
-            "issues": ["Primary CTA is low-contrast.", "Touch targets under 44px."],
-            "suggestions": ["Darken CTA to WCAG AA.", "Bump tap targets."],
-        },
-    ),
-    "identify": ActionSpec(
+"identify": ActionSpec(
         id="identify",
         category="discover",
         label="Identify",
@@ -386,7 +364,7 @@ Shape:
         system_prompt=_json_contract(
             """{
   "kind": "diagram_to_mermaid",
-  "mermaid": "full mermaid source, e.g. flowchart LR\\nA-->B",
+  "mermaid": "full valid mermaid source — wrap any label that contains parentheses, slashes, or special chars in double-quotes, e.g. A[\"Oxaloacetate (4C)\"] --> B[\"Citrate (6C)\"]",
   "notes": ["ambiguity you had to resolve"]
 }"""
         ),

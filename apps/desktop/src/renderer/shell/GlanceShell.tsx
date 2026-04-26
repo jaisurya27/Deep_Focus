@@ -263,40 +263,34 @@ export function GlanceShell() {
       const selection = store.pendingSelection;
       const image = store.pendingImage;
       let imageUrl = opts?.preferImageDataUrl ?? image?.dataUrl ?? null;
-      const text = opts?.preferText ?? selection?.text ?? null;
+      let text = opts?.preferText ?? selection?.text ?? null;
       const trimmedInstr = instruction.trim();
       if (!trimmedInstr && !text && !imageUrl) return;
 
-      // Fast path for obviously-visual prompts. If the user is asking about
-      // their screen and we have nothing visual attached yet, snap a
-      // screenshot BEFORE we ship the turn — saves the extra round-trip
-      // through the backend's `needs_context` response and makes the very
-      // first "what am I looking at?" feel instant.
-      if (!imageUrl && looksLikeVisualIntent(trimmedInstr)) {
-        const snap = await window.deepFocus?.capture?.fullscreen?.();
-        if (snap && snap.ok) {
-          imageUrl = snap.value.dataUrl;
-          store.setPendingImage({
-            dataUrl: snap.value.dataUrl,
-            width: snap.value.width,
-            height: snap.value.height,
-            savedPath: null,
-          });
-        } else if (snap && !snap.ok && snap.error.kind === "permission") {
-          setPanelNotice({
-            tone: "warn",
-            title: "Screen Recording permission needed",
-            body: "Grant access in System Settings → Privacy & Security → Screen & System Audio Recording to let Glance answer questions about your screen.",
-            action: {
-              label: "Open System Settings",
-              href: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-            },
-          });
+      // On follow-up turns the pending slots are already cleared. First try to
+      // extract a concrete name/query from the last artifact (most reliable for
+      // agentverse actions like price_comparison which can't see images). Then
+      // fall back to the last user turn's selection or image.
+      if (!text && !imageUrl && trimmedInstr) {
+        for (let i = store.messages.length - 1; i >= 0; i -= 1) {
+          const m = store.messages[i];
+          if (m.role === "assistant" && m.artifact) {
+            const a = m.artifact as Record<string, unknown>;
+            const name =
+              (a.name as string | undefined) ||
+              (a.product_name as string | undefined) ||
+              (a.product as string | undefined) ||
+              (a.title as string | undefined) ||
+              (a.dish as string | undefined);
+            if (name) { text = name; break; }
+          }
+          if (m.role === "user") {
+            if (m.selection?.text) { text = m.selection.text; break; }
+            if (m.image?.dataUrl) { imageUrl = m.image.dataUrl; break; }
+          }
         }
       }
 
-      // `image` above is a snapshot — re-read after the fast-path
-      // auto-capture so the message carries the freshly grabbed frame.
       const imageForMsg = useSession.getState().pendingImage ?? image;
       const userMsg: ChatMessage = {
         id: makeMessageId(),
@@ -331,40 +325,7 @@ export function GlanceShell() {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // Decide which image to send to the artifact router.
-      // 1. Explicit region capture (Cmd+Ctrl+S) or caller-provided image wins.
-      // 2. Ambient full-screen snapshot when there is no selected text AND
-      //    EITHER this is the first turn of the session OR the new query
-      //    looks like a fresh standalone ask (e.g. "summarize this page",
-      //    "what's on my screen now"). On a true follow-up
-      //    ("what is the final answer", "explain step 3"), skip the capture
-      //    so the backend's history replay can answer from the prior artifact
-      //    instead of being clobbered by a fresh image-only signal.
-      const hasPriorAssistant = useSession
-        .getState()
-        .messages.some((m) => m.role === "assistant" && (m.content || m.artifact));
-      const isFollowUp = hasPriorAssistant && looksLikeFollowUp(trimmedInstr);
-      // Image-gen requests use selected text as context; attaching a screenshot
-      // would make the router see an image and risk misrouting away from generate_image.
-      const isImageGen = looksLikeImageGen(trimmedInstr);
-      let wireImage: string | null = imageUrl;
-      if (!wireImage && !text && !isFollowUp && !isImageGen) {
-        try {
-          const t0 = performance.now();
-          const cap = await window.deepFocus?.capture?.fullscreen?.();
-          const ms = Math.round(performance.now() - t0);
-          if (cap?.ok && cap.value?.dataUrl) {
-            wireImage = cap.value.dataUrl;
-            console.info(
-              `[chat] ambient full-screen capture attached (${cap.value.width}×${cap.value.height}, ${ms}ms)`,
-            );
-          } else {
-            console.info(`[chat] ambient capture unavailable (${ms}ms) — no image context`);
-          }
-        } catch (err) {
-          console.warn("[chat] ambient capture threw — continuing without image:", err);
-        }
-      }
+      const wireImage: string | null = imageUrl;
 
       try {
         const res = await runArtifact({

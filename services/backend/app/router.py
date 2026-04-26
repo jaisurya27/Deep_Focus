@@ -86,7 +86,7 @@ def _router_system_prompt(catalog: list[dict]) -> str:
         "   AND no image is attached, pick `needs_context` so the client can "
         "   capture a screenshot and retry.\n"
         "4. IMAGE-ONLY SPECIALISATION. Only pick a strong visual action "
-        "   (critique_ui, explain_chart, identify, recipe, diagram_to_mermaid) "
+        "   (explain_chart, identify, recipe, diagram_to_mermaid)"
         "   when there is NO captured text AND no conflicting instruction. "
         "   Be decisive when the visual signal is strong and nothing else "
         "   competes (code, error, chart, product photo, etc.).\n"
@@ -414,7 +414,7 @@ def _heuristic_route(
             return pick("explain_code", ["fix_code", "diagnose_error"], "Code editor detected.")
         if _CHART_TITLE.search(title_lc):
             return pick("explain_chart", ["answer"], "Chart/data context detected.")
-        return pick("identify", ["critique_ui", "explain_chart"], "Image-only context.")
+        return pick("identify", ["explain_chart"], "Image-only context.")
 
     return pick("answer", [], "Fallback — free-form answer.")
 

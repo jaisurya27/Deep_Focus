@@ -26,7 +26,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 # How many of the most recent exchanges to replay as context.
 # (The spec calls for the last 4 turns, so 8 messages total: user+assistant.)
-MAX_CONTEXT_EXCHANGES = 8
+MAX_CONTEXT_EXCHANGES = 16
 
 
 class IncomingMessage(BaseModel):

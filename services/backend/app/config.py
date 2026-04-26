@@ -36,6 +36,9 @@ class Settings:
     openai_model: str
     openai_vision_model: str
     openai_image_model: str
+    gemini_api_key: str | None
+    gemini_model: str
+    gemini_vision_model: str
     backend_host: str
     backend_port: int
     session_db_path: str | None
@@ -66,6 +69,9 @@ def get_settings() -> Settings:
         openai_model=_env("OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini",
         openai_vision_model=_env("OPENAI_VISION_MODEL", "gpt-4o") or "gpt-4o",
         openai_image_model=_env("OPENAI_IMAGE_MODEL", "gpt-image-1.5") or "gpt-image-1.5",
+        gemini_api_key=_env("GEMINI_API_KEY"),
+        gemini_model=_env("GEMINI_MODEL", "gemini-2.0-flash") or "gemini-2.0-flash",
+        gemini_vision_model=_env("GEMINI_VISION_MODEL", "gemini-2.0-flash") or "gemini-2.0-flash",
         backend_host=_env("BACKEND_HOST", "127.0.0.1") or "127.0.0.1",
         backend_port=int(_env("BACKEND_PORT", "8765") or "8765"),
         session_db_path=_env("SESSION_DB_PATH"),

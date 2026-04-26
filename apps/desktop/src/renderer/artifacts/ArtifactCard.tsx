@@ -22,7 +22,6 @@ import type {
   PriceMonitorArtifact,
   PriceSource,
   RestaurantOption,
-  CritiqueUiArtifact,
   DiagnoseErrorArtifact,
   DiagramMermaidArtifact,
   DraftReplyArtifact,
@@ -71,8 +70,6 @@ export function ArtifactCard({ artifact }: { artifact: Artifact }) {
       return <DiagnoseErrorCard a={artifact as DiagnoseErrorArtifact} />;
     case "explain_chart":
       return <ExplainChartCard a={artifact as ExplainChartArtifact} />;
-    case "critique_ui":
-      return <CritiqueUiCard a={artifact as CritiqueUiArtifact} />;
     case "identify":
       return <IdentifyCard a={artifact as IdentifyArtifact} />;
     case "rewrite":
@@ -512,41 +509,6 @@ function ExplainChartCard({ a }: { a: ExplainChartArtifact }) {
   );
 }
 
-function CritiqueUiCard({ a }: { a: CritiqueUiArtifact }) {
-  return (
-    <Card title="UI critique" tone="info">
-      <div className="grid gap-2 md:grid-cols-3">
-        <MiniSection title="Strengths" items={a.strengths} tone="emerald" />
-        <MiniSection title="Issues" items={a.issues} tone="amber" />
-        <MiniSection title="Suggestions" items={a.suggestions} tone="sky" />
-      </div>
-    </Card>
-  );
-}
-
-function MiniSection({
-  title,
-  items,
-  tone,
-}: {
-  title: string;
-  items?: string[];
-  tone: "emerald" | "amber" | "sky";
-}) {
-  const border = {
-    emerald: "border-emerald-500/30",
-    amber: "border-amber-500/30",
-    sky: "border-sky-500/30",
-  }[tone];
-  return (
-    <div className={`rounded-lg border ${border} bg-slate-950/40 p-2`}>
-      <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-slate-400">
-        {title}
-      </div>
-      <Bullets items={items} empty="—" />
-    </div>
-  );
-}
 
 function IdentifyCard({ a }: { a: IdentifyArtifact }) {
   const query = a.name || "";
@@ -691,6 +653,23 @@ function DraftReplyCard({ a }: { a: DraftReplyArtifact }) {
   );
 }
 
+/**
+ * Fix common LLM Mermaid mistakes before handing to the parser.
+ *   1. Node labels with special chars (parens, slashes, #, &) must be double-quoted.
+ *   2. Strip stray `+` between nodes (LLM sometimes writes A + B instead of A --> B).
+ */
+function sanitizeMermaid(src: string): string {
+  // Quote any bracket-style label that contains characters Mermaid can't handle unquoted.
+  // Matches [some text] but NOT already-quoted ["some text"] or code-fence contents.
+  src = src.replace(
+    /\[(?!")([^\]]*[()/#&,;][^\]]*)\]/g,
+    (_match, inner: string) => `["${inner.replace(/"/g, "'")}"]`,
+  );
+  // Remove bare ` + ` between node identifiers (not inside labels).
+  src = src.replace(/(\w)\s*\+\s*(\w)/g, "$1 $2");
+  return src;
+}
+
 function MermaidDiagram({ source }: { source: string }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -702,8 +681,9 @@ function MermaidDiagram({ source }: { source: string }) {
     if (!el || !source.trim()) return;
     setError(null);
     el.innerHTML = "";
+    const clean = sanitizeMermaid(source);
     mermaid
-      .render(idRef.current, source)
+      .render(idRef.current, clean)
       .then(({ svg }) => {
         if (cancelled || !ref.current) return;
         ref.current.innerHTML = svg;

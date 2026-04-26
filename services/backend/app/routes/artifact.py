@@ -51,11 +51,10 @@ router = APIRouter(tags=["artifact"])
 # trust the existing session to thread history through; it does NOT mean no
 # context. Without this replay the model forgets the last turn entirely and
 # follow-up questions read as cold-start asks.
-MAX_CONTEXT_EXCHANGES = 8
-# Per-message hard cap when replaying. Assistant turns from this route are
-# stored as the full artifact JSON (already capped at 8000); for follow-ups
-# we only need a digest — keep it smaller so the wire stays lean.
-REPLAY_CHAR_CAP = 1800
+MAX_CONTEXT_EXCHANGES = 16
+# Per-message hard cap when replaying. Raised from 1800 — recipes, code fixes,
+# and rich artifact bodies need more room so follow-ups don't lose context.
+REPLAY_CHAR_CAP = 4000
 
 
 class ArtifactRequest(BaseModel):
@@ -189,7 +188,7 @@ async def _artifact_event_stream(
         return
 
     spec = ACTIONS[chosen_action]
-    user_payload = _user_payload(req.text, req.user_instruction, spec.label)
+    user_payload = _user_payload(req.text, req.user_instruction, spec.label, has_image=has_image)
 
     # Delegate Agentverse-integrated actions to the bridge (port 8020).
     # Skip delegation in mock mode so offline demos still work end-to-end.
@@ -340,6 +339,30 @@ async def _artifact_event_stream(
     yield {"event": "done", "data": json.dumps({"session_id": session_id})}
 
 
+def _history_digest(session_id: str, max_chars: int = 1200) -> str:
+    """One-paragraph prose summary of the last few turns for agentverse context."""
+    history = _history_wire(session_id)
+    if not history:
+        return ""
+    lines: list[str] = []
+    budget = max_chars
+    for m in reversed(history):
+        role = "User" if m["role"] == "user" else "Assistant"
+        snippet = (m.get("content") or "").strip()
+        if not snippet:
+            continue
+        if len(snippet) > 400:
+            snippet = snippet[:400].rstrip() + "…"
+        line = f"{role}: {snippet}"
+        budget -= len(line)
+        if budget < 0:
+            break
+        lines.append(line)
+    if not lines:
+        return ""
+    return "Prior conversation (most recent last):\n" + "\n".join(reversed(lines))
+
+
 async def _agentverse_stream(
     req: ArtifactRequest,
     session_id: str,
@@ -360,29 +383,40 @@ async def _agentverse_stream(
         "Start it with: cd services/agentverse && .venv/bin/python run_all.py"
     )
 
+    # Send the raw query to the bridge — NOT the formatted user_payload which
+    # contains "Action: X. User instruction: ... (No text — use attached image)"
+    # preamble that confuses the bridge LLMs. Preference order:
+    #   1. captured text (e.g. product name recovered from prior identify artifact)
+    #   2. free-form user instruction
+    #   3. formatted payload as last resort
+    raw_query = (req.text or "").strip() or (req.user_instruction or "").strip() or user_payload
+
+    # History digest as separate context so it's available for follow-ups
+    # but never surfaces in display fields (product name, topic, etc.).
+    digest = _history_digest(session_id)
+
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             if action == "price_comparison":
                 r = await client.post(
                     f"{bridge}/price_compare",
-                    json={"action": action, "text": user_payload},
+                    json={"action": action, "text": raw_query, "context": digest},
                 )
             elif action == "debate":
                 r = await client.post(
                     f"{bridge}/debate",
-                    json={"text": user_payload},
+                    json={"text": raw_query, "context": digest},
                 )
             elif action == "price_monitor":
-                # Extract product + target_price from payload for the monitor endpoint
-                product, target = _parse_monitor_request(user_payload)
+                product, target = _parse_monitor_request(raw_query)
                 r = await client.post(
                     f"{bridge}/price_monitor",
-                    json={"text": user_payload, "product": product, "target_price": target},
+                    json={"text": raw_query, "product": product, "target_price": target, "context": digest},
                 )
             else:
                 r = await client.post(
                     f"{bridge}/agent",
-                    json={"action": action, "text": user_payload},
+                    json={"action": action, "text": raw_query, "context": digest},
                 )
             r.raise_for_status()
             body = r.json()
@@ -475,14 +509,18 @@ def _pick_json_stream(provider: Any, *, multimodal: bool):
 # --- helpers --------------------------------------------------------------
 
 
-def _user_payload(text: str | None, extra: str | None, label: str) -> str:
+def _user_payload(
+    text: str | None, extra: str | None, label: str, *, has_image: bool = False
+) -> str:
     chunks: list[str] = [f"Action: {label}."]
     if extra and extra.strip():
         chunks.append(f"User instruction: {extra.strip()}")
     if text and text.strip():
         chunks.append("<captured>\n" + text.strip() + "\n</captured>")
-    else:
+    elif has_image:
         chunks.append("(No text — use the attached image as the context.)")
+    # On pure follow-ups (no text, no image) we omit both — the history
+    # replay already gives the model the prior artifact as context.
     return "\n\n".join(chunks)
 
 
@@ -527,7 +565,7 @@ def _condense_assistant(content: str) -> str:
         return s
     # Prefer the fields most likely to carry the user-visible answer.
     # "prompt" covers generate_image artifacts; "title" covers recipe/food.
-    for key in ("body", "answer", "text", "summary", "explanation", "translation", "prompt", "title"):
+    for key in ("body", "answer", "text", "summary", "explanation", "translation", "prompt", "title", "name", "product_name"):
         val = data.get(key)
         if isinstance(val, str) and val.strip():
             kind = data.get("kind") or data.get("action") or "artifact"
