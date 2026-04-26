@@ -526,7 +526,8 @@ def _condense_assistant(content: str) -> str:
     if not isinstance(data, dict):
         return s
     # Prefer the fields most likely to carry the user-visible answer.
-    for key in ("body", "answer", "text", "summary", "explanation", "translation"):
+    # "prompt" covers generate_image artifacts; "title" covers recipe/food.
+    for key in ("body", "answer", "text", "summary", "explanation", "translation", "prompt", "title"):
         val = data.get(key)
         if isinstance(val, str) and val.strip():
             kind = data.get("kind") or data.get("action") or "artifact"
@@ -615,11 +616,15 @@ def _persist(
                 preset=preset_tag,
             ),
         )
+        # Strip large binary fields before persisting — data_url is a huge
+        # base64 blob that would crowd out the prompt and artifact text from
+        # the 8 kB history replay window, breaking follow-up context.
+        storable = {k: v for k, v in data.items() if k not in ("data_url",)}
         store.append(
             session_id,
             Exchange(
                 role="assistant",
-                content=json.dumps(data)[:8000],
+                content=json.dumps(storable)[:8000],
                 source=req.action,
                 preset=preset_tag,
             ),
