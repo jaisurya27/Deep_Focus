@@ -8,11 +8,9 @@ import {
 } from "react";
 
 import type { ActionSummary } from "../../shared/artifacts";
-import { CATEGORY_LABELS, CATEGORY_ORDER } from "../../shared/artifacts";
 import type { PanelOpenPayload } from "../../shared/ipc";
 import {
   checkHealth,
-  listActions,
   runArtifact,
   streamChat,
   streamVision,
@@ -66,12 +64,15 @@ export function GlanceShell() {
 
   const hasContext = !!pendingSelection?.text || !!pendingImage?.dataUrl;
 
-  // Auto-expand when context arrives or a turn is in flight.
+  // Auto-expand while a turn is streaming, when an artifact lands, or when
+  // the main process surfaces a notice. Context arrival is handled by the
+  // IPC onOpen handler below so the user can collapse-with-context and have
+  // the orb stay collapsed until they explicitly tap it again.
   useEffect(() => {
-    if (hasContext || isStreaming || lastArtifactMsg || panelNotice) {
+    if (isStreaming || lastArtifactMsg || panelNotice) {
       setExpanded(true);
     }
-  }, [hasContext, isStreaming, lastArtifactMsg, panelNotice]);
+  }, [isStreaming, lastArtifactMsg, panelNotice]);
 
   // --- Wire up panel open / health -----------------------------------
 
@@ -141,7 +142,14 @@ export function GlanceShell() {
     };
   }, []);
 
-  // --- Esc to collapse, Cmd+K to clear -------------------------------
+  // ONE universal dismiss gesture: tuck away to the orb, preserve state.
+  // Context survives across minimize/reopen. To nuke everything (context +
+  // chat history) use Cmd+K — that's the one explicit reset.
+  const minimizeShell = useCallback(() => {
+    setExpanded(false);
+    setDraft("");
+    setPanelNotice(null);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -150,27 +158,18 @@ export function GlanceShell() {
           abortRef.current?.abort();
           return;
         }
-        collapseShell();
+        minimizeShell();
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         useSession.getState().clear();
         setDraft("");
+        setPanelNotice(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isStreaming]);
-
-  const collapseShell = useCallback(() => {
-    setExpanded(false);
-    setDraft("");
-    setPanelNotice(null);
-    const store = useSession.getState();
-    store.setPendingSelection(null);
-    store.setPendingImage(null);
-    // Keep message history in the store so "full chat" still has it.
-  }, []);
+  }, [isStreaming, minimizeShell]);
 
   // --- Send text turn ------------------------------------------------
 
@@ -365,12 +364,10 @@ export function GlanceShell() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
 
-  const dismissArtifact = useCallback(() => {
-    const store = useSession.getState();
-    store.clear();
-    setDraft("");
-    setExpanded(false);
-  }, []);
+  // Artifact card's close → same universal minimize. The artifact stays in
+  // the session store so "full chat" still has it; tapping the orb brings
+  // it back. Hard reset is Cmd+K.
+  const dismissArtifact = minimizeShell;
 
   // ------------------------------------------------------------------
   // Render
@@ -402,22 +399,10 @@ export function GlanceShell() {
           </div>
         ) : null}
 
-        {panelNotice ? (
-          <NoticeBanner
-            notice={panelNotice}
-            onDismiss={() => setPanelNotice(null)}
-          />
-        ) : null}
+        {panelNotice ? <NoticeBanner notice={panelNotice} /> : null}
 
         {hasContext && !lastArtifactMsg ? (
-          <ContextChip
-            selection={pendingSelection}
-            image={pendingImage}
-            onClear={() => {
-              useSession.getState().setPendingSelection(null);
-              useSession.getState().setPendingImage(null);
-            }}
-          />
+          <ContextChip selection={pendingSelection} image={pendingImage} />
         ) : null}
 
         {hasContext && !lastArtifactMsg && !isStreaming ? (
@@ -429,15 +414,6 @@ export function GlanceShell() {
               setDraft(prompt);
               void sendText(prompt);
             }}
-          />
-        ) : null}
-
-        {hasContext && !lastArtifactMsg && !isStreaming ? (
-          <ActionChips
-            hasText={!!pendingSelection?.text}
-            hasImage={!!pendingImage?.dataUrl}
-            disabled={isStreaming}
-            onPick={(a) => void runAction(a)}
           />
         ) : null}
 
@@ -482,7 +458,7 @@ export function GlanceShell() {
                   : "Ask anything…"
             }
             providerLabel={providerLabel}
-            onClose={collapseShell}
+            onClose={minimizeShell}
           />
         ) : null}
       </div>
@@ -623,11 +599,9 @@ function DraggableOrb({ onClick }: { onClick: () => void }) {
 function ContextChip({
   selection,
   image,
-  onClear,
 }: {
   selection: AttachedSelection | null;
   image: AttachedImage | null;
-  onClear: () => void;
 }) {
   return (
     <div className="slide-down glass flex max-w-[440px] items-center gap-2 rounded-2xl px-2.5 py-1.5">
@@ -654,13 +628,6 @@ function ContextChip({
           {selection.sourceApp}
         </span>
       ) : null}
-      <button
-        aria-label="Clear context"
-        onClick={onClear}
-        className="shrink-0 rounded-full p-1 text-slate-400 transition hover:bg-white/5 hover:text-slate-100"
-      >
-        <CloseIcon />
-      </button>
     </div>
   );
 }
@@ -673,10 +640,8 @@ function ContextChip({
 
 function NoticeBanner({
   notice,
-  onDismiss,
 }: {
   notice: NonNullable<PanelOpenPayload["notice"]>;
-  onDismiss: () => void;
 }) {
   const tone = notice.tone ?? "warn";
   const palette =
@@ -710,13 +675,6 @@ function NoticeBanner({
           </button>
         ) : null}
       </div>
-      <button
-        aria-label="Dismiss"
-        onClick={onDismiss}
-        className="shrink-0 rounded-full p-1 text-slate-300/80 transition hover:bg-white/10 hover:text-white"
-      >
-        <CloseIcon />
-      </button>
     </div>
   );
 }
@@ -817,109 +775,23 @@ function buildSmartCrumbs({
     }
     out.push({ label: "Ask something else…", prompt: "" });
   } else if (image?.dataUrl) {
-    out.push({ label: "Describe what's here", prompt: "Describe everything visible in this region, concisely." });
+    out.push({ label: "Describe", prompt: "Describe everything visible in this region, concisely." });
     out.push({ label: "Extract text", prompt: "Extract all legible text verbatim." });
+    out.push({
+      label: "Translate → English",
+      prompt:
+        "Detect any non-English text in this image and translate it to English. " +
+        "Preserve the layout when possible, and note the detected source language.",
+    });
     out.push({ label: "Explain", prompt: "Explain what this is and why it matters." });
     out.push({ label: "What should I do?", prompt: "Given this, what's the most useful next action I can take?" });
   }
 
-  // Keep it tight — at most 4 chips fit cleanly beside the 520px shell.
-  return out.filter((c) => c.prompt).slice(0, 4);
+  // Keep it tight — up to 5 chips; flex-wrap takes care of anything that
+  // won't fit on one row of the 520px shell.
+  return out.filter((c) => c.prompt).slice(0, 5);
 }
 
-// ---------------------------------------------------------------------
-// Action chips — small category-grouped, for artifact actions
-// ---------------------------------------------------------------------
-
-function ActionChips({
-  hasText,
-  hasImage,
-  disabled,
-  onPick,
-}: {
-  hasText: boolean;
-  hasImage: boolean;
-  disabled: boolean;
-  onPick: (a: ActionSummary) => void;
-}) {
-  const [actions, setActions] = useState<ActionSummary[]>([]);
-  const [category, setCategory] = useState<string>("understand");
-
-  useEffect(() => {
-    let cancelled = false;
-    listActions().then((list) => {
-      if (!cancelled) setActions(list);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const available = useMemo(
-    () =>
-      actions.filter((a) => {
-        if (a.needs_image && !hasImage) return false;
-        if (a.needs_text && !hasText && !hasImage) return false;
-        return true;
-      }),
-    [actions, hasImage, hasText],
-  );
-
-  const grouped = useMemo(() => {
-    const g: Record<string, ActionSummary[]> = {};
-    for (const a of available) (g[a.category] ??= []).push(a);
-    return g;
-  }, [available]);
-
-  const cats = useMemo(
-    () => CATEGORY_ORDER.filter((c) => grouped[c]?.length),
-    [grouped],
-  );
-
-  useEffect(() => {
-    if (cats.length && !cats.includes(category as never)) setCategory(cats[0]);
-  }, [cats, category]);
-
-  if (!cats.length) return null;
-  const chips = grouped[category] ?? [];
-
-  return (
-    <div className="slide-down flex w-full flex-col items-end gap-1.5">
-      <div className="flex gap-1">
-        {cats.map((c) => {
-          const active = c === category;
-          return (
-            <button
-              key={c}
-              onClick={() => setCategory(c)}
-              className={
-                "rounded-full px-2 py-[2px] text-[10px] font-mono uppercase tracking-[0.14em] transition " +
-                (active
-                  ? "bg-emerald-500/15 text-emerald-200"
-                  : "text-slate-500 hover:text-slate-300")
-              }
-            >
-              {CATEGORY_LABELS[c]}
-            </button>
-          );
-        })}
-      </div>
-      <div className="flex flex-wrap justify-end gap-1.5">
-        {chips.map((a) => (
-          <button
-            key={a.id}
-            disabled={disabled}
-            onClick={() => onPick(a)}
-            title={a.blurb}
-            className="rounded-full border border-white/8 bg-slate-900/60 px-3 py-[5px] text-[11.5px] text-slate-200 backdrop-blur-md transition hover:border-emerald-500/50 hover:bg-emerald-500/10 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {a.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------
 // Composer pill — mic + text + send

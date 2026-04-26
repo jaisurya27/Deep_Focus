@@ -42,17 +42,6 @@ const api = {
       ipcRenderer.on(IPC.OVERLAY_START, wrapped);
       return () => ipcRenderer.removeListener(IPC.OVERLAY_START, wrapped);
     },
-    /**
-     * Pull the cached start payload from main. Used on renderer mount so a
-     * React StrictMode double-mount (which happens in dev) never misses the
-     * push event from `OVERLAY_START`.
-     */
-    async requestStart(): Promise<
-      | { display: Electron.Rectangle; captureSize: { width: number; height: number } }
-      | null
-    > {
-      return ipcRenderer.invoke(IPC.OVERLAY_REQUEST_START);
-    },
     complete(rect: { x: number; y: number; width: number; height: number }) {
       ipcRenderer.send(IPC.OVERLAY_COMPLETE, rect);
     },

@@ -81,15 +81,8 @@ type Pending = {
   windowContext: WindowContext | null | undefined;
 };
 
-type StartPayload = {
-  display: Electron.Rectangle;
-  captureSize: { width: number; height: number };
-};
-
 let pending: Pending | null = null;
 let ipcWired = false;
-// Keyed by webContents id so multi-display overlays each get the right display.
-const startPayloadByContents = new Map<number, StartPayload>();
 
 /**
  * Drops a dim, transparent BrowserWindow over every display so the user can
@@ -176,32 +169,12 @@ export async function startRegionCapture(opts?: {
           path.resolve(__dirname, "../../dist/renderer/overlay.html"),
         );
       }
-      // Cache the start payload so the renderer can pull it on mount — this
-      // is race-free vs. pushing on `did-finish-load`, which can arrive before
-      // React registers its listener (especially in dev under StrictMode).
-      const startPayload: StartPayload = {
-        display: bounds,
-        captureSize: { width: bounds.width, height: bounds.height },
-      };
-      // Capture the id eagerly: by the time `closed` fires `win.webContents`
-      // has been destroyed and touching any property on it throws
-      // "Object has been destroyed".
-      const contentsId = win.webContents.id;
-      startPayloadByContents.set(contentsId, startPayload);
-      win.on("closed", () => {
-        startPayloadByContents.delete(contentsId);
-      });
-
       win.once("ready-to-show", () => {
         console.info(
           `[region] overlay ready on display ${display.id} (${bounds.width}×${bounds.height})`,
         );
         win.show();
         win.focus();
-      });
-      win.webContents.once("did-finish-load", () => {
-        console.info("[region] overlay did-finish-load — sending OVERLAY_START");
-        win.webContents.send(IPC.OVERLAY_START, startPayload);
       });
       windows.push(win);
     }),
@@ -219,20 +192,6 @@ export async function startRegionCapture(opts?: {
 function wireIpcOnce() {
   if (ipcWired) return;
   ipcWired = true;
-
-  ipcMain.handle(IPC.OVERLAY_REQUEST_START, (event) => {
-    const payload = startPayloadByContents.get(event.sender.id);
-    if (payload) {
-      console.info(
-        `[region] overlay pulled start payload (contentsId=${event.sender.id})`,
-      );
-      return payload;
-    }
-    console.warn(
-      `[region] overlay requested start payload but none cached (contentsId=${event.sender.id})`,
-    );
-    return null;
-  });
 
   ipcMain.on(IPC.OVERLAY_COMPLETE, async (_event, payload: Rectangle) => {
     console.info(

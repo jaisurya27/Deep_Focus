@@ -172,8 +172,11 @@ services/backend/        FastAPI on 127.0.0.1:8765
   never speaks to xAI/OpenAI directly. Keys live in `services/backend/.env`
   (gitignored) or Electron `safeStorage`.
 - **Mock mode is first-class.** With no keys set, every flow renders.
-- **No native Node modules.** Active-window, selection, and capture all use
-  shell-outs or Electron built-ins.
+- **Native modules are fine.** Previously we avoided them to keep the build
+ simple, but the hackathon pace and UX quality matter more — reach for a
+ well-maintained npm module (native or otherwise) whenever it's meaningfully
+ better than a shell-out. Just keep the dependency list small and document
+ any post-install steps.
 - **Provider switching is config.** `CHAT_PROVIDER` / `VISION_PROVIDER` /
   `IMAGE_PROVIDER` ∈ `xai | openai | mock`; auto mode falls back gracefully.
 - **Tool-calling is opt-in.** Connect-tier actions must never auto-fire without
