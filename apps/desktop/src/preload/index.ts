@@ -91,25 +91,6 @@ const api = {
   },
   capture: {
     /**
-     * Grab the active display's current pixels (panel hidden from frame) and
-     * return a downscaled data URL. Returns null if capture failed (permission
-     * missing, desktopCapturer returned nothing, etc.) — callers should fall
-     * back to a text-only request in that case.
-     */
-    async fullscreen(): Promise<
-      | { dataUrl: string; width: number; height: number }
-      | null
-    > {
-      return ipcRenderer.invoke(IPC.CAPTURE_FULLSCREEN);
-    },
-  },
-  shell: {
-    openExternal(href: string) {
-      ipcRenderer.send(IPC.OPEN_EXTERNAL, href);
-    },
-  },
-  capture: {
-    /**
      * Silently snap the full display under the cursor. Used by the
      * "smart context" loop so prompts like "what am I looking at?"
      * auto-attach a screenshot. Returns the same envelope the main
@@ -129,6 +110,11 @@ const api = {
         }
     > {
       return ipcRenderer.invoke(IPC.CAPTURE_FULLSCREEN);
+    },
+  },
+  shell: {
+    openExternal(href: string) {
+      ipcRenderer.send(IPC.OPEN_EXTERNAL, href);
     },
   },
 };

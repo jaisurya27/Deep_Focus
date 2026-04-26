@@ -298,6 +298,27 @@ def _heuristic_route(
             return pick("answer", ["rewrite", "translate"], "Long passage — summarize/prose.")
 
     if has_image:
+        # When there's no text and no instruction, use the window context
+        # to make a smarter heuristic pick before the LLM router takes over.
+        # This only matters in mock mode or as a fast-path before the vision
+        # model responds; real providers will call the LLM router above.
+        app_lc = ((window_context or {}).get("appName") or "").lower()
+        title_lc = ((window_context or {}).get("title") or "").lower()
+        _FOOD_APPS = re.compile(r"doordash|ubereats|uber\s*eats|grubhub|yelp|opentable|zomato|instacart", re.I)
+        _FOOD_TITLE = re.compile(r"\b(recipe|restaurant|menu|food|eat|cook|dish|meal|dinner|lunch|breakfast|cafe|pizza|sushi|burger|ramen)\b", re.I)
+        _PRODUCT_APPS = re.compile(r"amazon|walmart|shopify|ebay|etsy|bestbuy|target", re.I)
+        _CODE_APPS_RE = re.compile(r"code|xcode|terminal|iterm|intellij|pycharm|webstorm|vim|nvim|sublime", re.I)
+        _CHART_TITLE = re.compile(r"\b(chart|graph|analytics|dashboard|stats|metrics|data)\b", re.I)
+
+        if _FOOD_APPS.search(app_lc) or _FOOD_TITLE.search(title_lc):
+            return pick("food_order", ["recipe", "restaurant_booking"], "Food context detected.")
+        if _PRODUCT_APPS.search(app_lc):
+            return pick("product", ["shopping"], "Shopping context detected.")
+        if _CODE_APPS_RE.search(app_lc):
+            return pick("explain_code", ["fix_code", "diagnose_error"], "Code editor detected.")
+        if _CHART_TITLE.search(title_lc):
+            return pick("explain_chart", ["answer"], "Chart/data context detected.")
+
         return pick("identify", ["critique_ui", "explain_chart"], "Image-only context.")
 
     return pick("answer", [], "Fallback — free-form answer.")

@@ -162,6 +162,140 @@ export type AnswerArtifact = {
   followups?: string[];
 };
 
+export type MapArtifact = {
+  kind: "map";
+  title?: string;
+  address?: string;
+  description?: string;
+  map_query?: string;
+  directions_from?: string | null;
+  place_type?: string;
+  links?: { label: string; query: string }[];
+};
+
+export type ShoppingItem = {
+  retailer: string;
+  price?: string | null;
+  url?: string;
+  add_to_cart?: boolean;
+};
+
+export type ShoppingArtifact = {
+  kind: "shopping";
+  product_name?: string;
+  description?: string;
+  price_range?: string;
+  image_search?: string;
+  items?: ShoppingItem[];
+};
+
+export type FoodOrderArtifact = {
+  kind: "food_order";
+  dish?: string;
+  cuisine?: string;
+  recipe?: {
+    ingredients?: string[];
+    steps?: string[];
+    time_min?: number;
+  };
+  order_options?: {
+    platform: string;
+    search_query?: string;
+    url?: string;
+  }[];
+  nearby_query?: string;
+};
+
+export type WeatherDay = {
+  day: string;
+  high_f?: number;
+  low_f?: number;
+  condition?: string;
+};
+
+export type WeatherArtifact = {
+  kind: "weather";
+  location?: string;
+  condition?: string;
+  temperature_f?: number;
+  temperature_c?: number;
+  feels_like_f?: number;
+  humidity?: number;
+  wind_mph?: number;
+  wind_direction?: string;
+  forecast?: WeatherDay[];
+  weather_query?: string;
+};
+
+export type RestaurantBookingArtifact = {
+  kind: "restaurant_booking";
+  name?: string;
+  cuisine?: string;
+  address?: string;
+  rating?: number;
+  price_level?: string;
+  description?: string;
+  opentable_query?: string;
+  opentable_url?: string;
+  phone?: string | null;
+  map_query?: string;
+  hours?: string | null;
+};
+
+export type FlightTrackArtifact = {
+  kind: "flight_track";
+  route?: string;
+  origin?: string;
+  destination?: string;
+  current_price?: string | null;
+  airline?: string | null;
+  flight_number?: string | null;
+  departure_date?: string;
+  duration?: string | null;
+  typical_price_range?: string | null;
+  price_trend?: "rising" | "falling" | "stable" | string;
+  google_flights_url?: string;
+  kayak_url?: string;
+};
+
+export type EmailComposeArtifact = {
+  kind: "email_compose";
+  to_name?: string;
+  to_email?: string | null;
+  subject?: string;
+  body?: string;
+  tone?: string;
+  cc?: string | null;
+};
+
+export type JobApplyArtifact = {
+  kind: "job_apply";
+  company?: string;
+  role?: string;
+  location?: string;
+  salary_range?: string | null;
+  requirements?: string[];
+  key_skills?: string[];
+  application_url?: string | null;
+  linkedin_easy_apply?: boolean;
+  notes?: string[];
+};
+
+export type GroceryListItem = {
+  name: string;
+  quantity?: string;
+  category?: string;
+};
+
+export type GroceryListArtifact = {
+  kind: "grocery_list";
+  recipe_name?: string;
+  servings?: number;
+  items?: GroceryListItem[];
+  instacart_query?: string;
+  walmart_grocery_query?: string;
+};
+
 /**
  * Smart-context escape hatch. Emitted by the backend when the router sees
  * that the user is asking about something visual/contextual on their screen
@@ -231,6 +365,15 @@ export type Artifact = (
   | TravelArtifact
   | AnswerArtifact
   | NeedsContextArtifact
+  | MapArtifact
+  | ShoppingArtifact
+  | FoodOrderArtifact
+  | WeatherArtifact
+  | RestaurantBookingArtifact
+  | FlightTrackArtifact
+  | EmailComposeArtifact
+  | JobApplyArtifact
+  | GroceryListArtifact
   | GenericArtifact
 ) &
   WithSuggestions;

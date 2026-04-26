@@ -4,6 +4,55 @@ Chronological record of changes on top of the `Refactor: Deep Focus → Glance`
 commit (110830b). When the branch ships, squash or re-organize into a proper
 changelog.
 
+## 2026-04-25 — Image-only capture auto-submit
+
+Region captures (Cmd+Ctrl+S) now auto-submit to `/artifact` immediately after
+the selection is made — no text input required. The backend vision router
+analyzes the image and returns the most relevant artifact (recipe, food order,
+identify, explain chart, etc.) without the user needing to type anything.
+
+**What changed:**
+- `GlanceShell.tsx` — added `runAutoRef` (always-fresh ref to `runAuto`) so the
+  `panel.onOpen` IPC handler can call it without stale-closure issues. On
+  `mode === "region"` with an `imageDataUrl`, `runAuto("")` is now scheduled via
+  `setTimeout(0)` immediately after the pending image is set.
+- `GlanceShell.tsx` — composer `onSend` now allows submitting with an empty draft
+  when `pendingImage` is set (belt-and-suspenders for the rare case where the
+  user beats the auto-submit).
+- `router.py` — heuristic fallback for image-only requests now uses app/window
+  context to make smarter pre-LLM picks: food apps → `food_order`, product
+  retailers → `product`, code editors → `explain_code`, chart titles →
+  `explain_chart` (applies only in mock mode; live providers still use the
+  vision LLM router).
+
+**Files changed:**
+- `apps/desktop/src/renderer/shell/GlanceShell.tsx`
+- `services/backend/app/router.py`
+
+## 2026-04-25 — 9 new bespoke artifact types (maps, shopping, food+order, weather, restaurant booking, flight tracker, email compose, job apply, grocery list)
+
+Added a full second wave of artifact kinds — each with a custom backend schema,
+mock data for offline demo, TypeScript type, and a purpose-built React card.
+
+**New artifact kinds:**
+
+| Kind | Category | Card highlights |
+|---|---|---|
+| `map` | Discover | CSS grid map art with location pin, Google Maps + Apple Maps + Directions links |
+| `shopping` | Discover | Per-retailer rows (Amazon/Walmart/Best Buy) with price, View, and Add-to-Cart buttons |
+| `food_order` | Discover | Tab card: "Order" tab lists DoorDash / Uber Eats / Grubhub deep-links; "Recipe" tab shows ingredients + steps |
+| `weather` | Discover | Current temp + condition hero, feels-like/humidity/wind stats row, 5-day forecast strip with weather emoji |
+| `restaurant_booking` | Connect | Star rating, price level, hours, and a prominent "Book on OpenTable" CTA |
+| `flight_track` | Connect | Route + price display, trend indicator (↑/↓/→), Google Flights + Kayak + price-alert links |
+| `email_compose` | Connect | Email header (To/Subject) + body pre-filled and editable, "Open Gmail" and "Outlook" deeplinks |
+| `job_apply` | Connect | Company, role, salary badge, skill pills, requirements list, "Apply Now →" and "LinkedIn" CTAs |
+| `grocery_list` | Connect | Per-category checkable item list (state preserved in card), Instacart + Walmart Grocery order links |
+
+**Files changed:**
+- `services/backend/app/artifacts.py` — 9 new `ActionSpec` entries, updated suggested-action catalog string in `_json_contract`
+- `apps/desktop/src/shared/artifacts.ts` — 9 new TS types + updated `Artifact` union
+- `apps/desktop/src/renderer/artifacts/ArtifactCard.tsx` — 9 new card components, switch cases, and imports
+
 ## 2026-04-25 — smart context loop: auto-screenshot when the model needs to see the screen
 
 "What am I looking at?" used to stump Glance: with no image attached, the

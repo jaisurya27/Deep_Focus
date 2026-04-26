@@ -32,7 +32,6 @@ export const IPC = {
   PANEL_DRAG_START: "panel:drag-start",
   PANEL_DRAG_MOVE: "panel:drag-move",
   OPEN_EXTERNAL: "shell:open-external",
-  CAPTURE_FULLSCREEN: "capture:fullscreen",
 } as const;
 
 export type PanelMode = "just-ask" | "selection" | "region";

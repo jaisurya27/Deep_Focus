@@ -135,6 +135,12 @@ export function GlanceShell() {
             savedPath: payload.imagePath ?? null,
           });
           shouldExpand = true;
+          // Auto-submit the capture immediately — no text required. The
+          // backend router will pick the best artifact (recipe, identify,
+          // food_order, explain_chart, etc.) from the image alone. Schedule
+          // via setTimeout(0) so React's batched state updates (setExpanded,
+          // etc.) settle first and runAutoRef.current is fresh.
+          setTimeout(() => void runAutoRef.current(""), 0);
         }
         store.setPendingSelection(null);
       } else if (payload.mode === "just-ask") {
@@ -316,10 +322,10 @@ export function GlanceShell() {
           const t0 = performance.now();
           const cap = await window.deepFocus?.capture?.fullscreen?.();
           const ms = Math.round(performance.now() - t0);
-          if (cap?.dataUrl) {
-            wireImage = cap.dataUrl;
+          if (cap?.ok && cap.value?.dataUrl) {
+            wireImage = cap.value.dataUrl;
             console.info(
-              `[chat] ambient full-screen capture attached (${cap.width}×${cap.height}, ${ms}ms)`,
+              `[chat] ambient full-screen capture attached (${cap.value.width}×${cap.value.height}, ${ms}ms)`,
             );
           } else {
             console.info(`[chat] ambient capture unavailable (${ms}ms) — no image context`);
@@ -448,6 +454,11 @@ export function GlanceShell() {
 
   // Back-compat shim: any legacy caller that used sendText stays working.
   const sendText = runAuto;
+
+  // Always-fresh ref so event-loop callbacks (e.g. the panel.onOpen IPC
+  // handler with [] deps) can call the latest runAuto without stale closures.
+  const runAutoRef = useRef(runAuto);
+  runAutoRef.current = runAuto;
 
   // --- Run an explicit artifact action (chip click / suggestion) ----
 
@@ -769,7 +780,11 @@ export function GlanceShell() {
               streaming={isStreaming}
               onSend={() => {
                 const text = draft.trim();
-                if (!text) return;
+                // Allow empty-text send when an image is pending (e.g. user
+                // captured a region but auto-submit hasn't fired yet, or they
+                // dismissed the auto result and want to re-submit).
+                const hasPendingImage = !!useSession.getState().pendingImage;
+                if (!text && !hasPendingImage) return;
                 void sendText(text);
               }}
               onStop={() => abortRef.current?.abort()}

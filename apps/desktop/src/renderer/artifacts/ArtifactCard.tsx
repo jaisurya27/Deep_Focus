@@ -7,20 +7,29 @@ import type {
   DiagnoseErrorArtifact,
   DiagramMermaidArtifact,
   DraftReplyArtifact,
+  EmailComposeArtifact,
   ExplainChartArtifact,
   ExplainCodeArtifact,
   FixCodeArtifact,
+  FlightTrackArtifact,
+  FoodOrderArtifact,
   GenericArtifact,
+  GroceryListArtifact,
   IdentifyArtifact,
+  JobApplyArtifact,
+  MapArtifact,
   MediaLookupArtifact,
   NeedsContextArtifact,
   ProductArtifact,
   RecipeArtifact,
+  RestaurantBookingArtifact,
   RewriteArtifact,
+  ShoppingArtifact,
   SolveMathArtifact,
   TasksCalendarArtifact,
   TranslateArtifact,
   TravelArtifact,
+  WeatherArtifact,
 } from "../../shared/artifacts";
 import { Markdown } from "../lib/markdown";
 
@@ -66,6 +75,24 @@ export function ArtifactCard({ artifact }: { artifact: Artifact }) {
       return <AnswerCard a={artifact as AnswerArtifact} />;
     case "needs_context":
       return <NeedsContextCard a={artifact as NeedsContextArtifact} />;
+    case "map":
+      return <MapCard a={artifact as MapArtifact} />;
+    case "shopping":
+      return <ShoppingCard a={artifact as ShoppingArtifact} />;
+    case "food_order":
+      return <FoodOrderCard a={artifact as FoodOrderArtifact} />;
+    case "weather":
+      return <WeatherCard a={artifact as WeatherArtifact} />;
+    case "restaurant_booking":
+      return <RestaurantBookingCard a={artifact as RestaurantBookingArtifact} />;
+    case "flight_track":
+      return <FlightTrackCard a={artifact as FlightTrackArtifact} />;
+    case "email_compose":
+      return <EmailComposeCard a={artifact as EmailComposeArtifact} />;
+    case "job_apply":
+      return <JobApplyCard a={artifact as JobApplyArtifact} />;
+    case "grocery_list":
+      return <GroceryListCard a={artifact as GroceryListArtifact} />;
     default:
       return <GenericCard a={artifact as GenericArtifact} />;
   }
@@ -692,6 +719,792 @@ function TravelCard({ a }: { a: TravelArtifact }) {
       }
     >
       {a.history ? <p className="text-[13px] leading-relaxed text-slate-200">{a.history}</p> : null}
+    </Card>
+  );
+}
+
+// --- Map -----------------------------------------------------------------
+
+function MapCard({ a }: { a: MapArtifact }) {
+  const mapsUrl = `https://www.google.com/maps/search/${encodeURIComponent(a.map_query ?? a.title ?? "")}`;
+  const directionsUrl = a.directions_from
+    ? `https://www.google.com/maps/dir/${encodeURIComponent(a.directions_from)}/${encodeURIComponent(a.address ?? a.title ?? "")}`
+    : `https://www.google.com/maps/dir//${encodeURIComponent(a.address ?? a.title ?? "")}`;
+  const appleMapsUrl = `https://maps.apple.com/?q=${encodeURIComponent(a.map_query ?? a.title ?? "")}`;
+
+  return (
+    <Card title={`Map${a.place_type ? ` · ${a.place_type}` : ""}`} subtitle={a.title} tone="info">
+      {/* Decorative map-grid placeholder */}
+      <div
+        className="relative overflow-hidden rounded-xl border border-slate-700/40"
+        style={{
+          height: 100,
+          background: "#0c1a2e",
+          backgroundImage:
+            "linear-gradient(rgba(148,163,184,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.07) 1px, transparent 1px)",
+          backgroundSize: "22px 22px",
+        }}
+      >
+        {/* Simulated roads */}
+        <div className="absolute inset-0 flex items-center">
+          <div className="h-[2px] w-full bg-slate-600/30" />
+        </div>
+        <div className="absolute inset-0 flex items-center" style={{ transform: "rotate(-25deg) scaleX(1.5)" }}>
+          <div className="h-[1.5px] w-full bg-slate-700/30" />
+        </div>
+        <div className="absolute inset-0 flex justify-center">
+          <div className="h-full w-[2px] bg-slate-600/30" />
+        </div>
+        {/* Location pin */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-0">
+            <div className="h-4 w-4 rounded-full border-2 border-white/80 bg-emerald-500 shadow-[0_0_14px_4px_rgba(16,185,129,0.45)]" />
+            <div className="h-2 w-[2px] bg-emerald-500/70" />
+          </div>
+        </div>
+        {/* Corner label */}
+        {a.title && (
+          <div className="absolute bottom-1.5 left-2.5 rounded bg-slate-900/80 px-1.5 py-0.5 text-[10px] font-medium text-slate-200 backdrop-blur-sm">
+            {a.title}
+          </div>
+        )}
+      </div>
+
+      {a.address ? (
+        <div className="flex items-start gap-2 text-[13px]">
+          <span className="mt-px shrink-0 text-emerald-400">📍</span>
+          <span className="text-slate-200">{a.address}</span>
+        </div>
+      ) : null}
+      {a.description ? (
+        <p className="text-[12.5px] leading-relaxed text-slate-400">{a.description}</p>
+      ) : null}
+      <div className="flex flex-wrap gap-1.5">
+        <a
+          href={mapsUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-emerald-200 transition hover:bg-emerald-500/20"
+        >
+          Google Maps
+        </a>
+        <a
+          href={directionsUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-slate-700/70 bg-slate-900/70 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-300 transition hover:border-emerald-500/50 hover:text-emerald-200"
+        >
+          Directions
+        </a>
+        <a
+          href={appleMapsUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-slate-700/70 bg-slate-900/70 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-300 transition hover:border-emerald-500/50 hover:text-emerald-200"
+        >
+          Apple Maps
+        </a>
+        {a.links?.map((l, i) => (
+          <LinkButton key={i} href={googleSearchUrl(l.query)}>
+            {l.label}
+          </LinkButton>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// --- Shopping ------------------------------------------------------------
+
+const RETAILER_META: Record<string, { icon: string; color: string }> = {
+  amazon:   { icon: "📦", color: "border-orange-500/40 text-orange-200 bg-orange-500/10" },
+  walmart:  { icon: "🛒", color: "border-blue-500/40 text-blue-200 bg-blue-500/10" },
+  "best buy": { icon: "💡", color: "border-yellow-500/40 text-yellow-200 bg-yellow-500/10" },
+  target:   { icon: "🎯", color: "border-red-500/40 text-red-200 bg-red-500/10" },
+};
+
+function retailerMeta(name: string) {
+  return RETAILER_META[name.toLowerCase()] ?? { icon: "🛍️", color: "border-slate-600 text-slate-300 bg-slate-800/50" };
+}
+
+function ShoppingCard({ a }: { a: ShoppingArtifact }) {
+  return (
+    <Card
+      title="Shop"
+      subtitle={a.product_name}
+      tone="success"
+      actions={a.price_range ? <Pill tone="emerald">{a.price_range}</Pill> : undefined}
+    >
+      {a.description ? <p className="text-[12.5px] text-slate-300">{a.description}</p> : null}
+
+      {a.items?.length ? (
+        <div className="flex flex-col gap-1.5">
+          {a.items.map((item, i) => {
+            const meta = retailerMeta(item.retailer);
+            return (
+              <div
+                key={i}
+                className="flex items-center gap-2.5 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2"
+              >
+                <span className="text-base">{meta.icon}</span>
+                <span className="flex-1 text-[13px] font-medium text-slate-200">{item.retailer}</span>
+                {item.price ? (
+                  <span className="font-mono text-[13px] font-semibold text-emerald-300">{item.price}</span>
+                ) : null}
+                {item.url ? (
+                  <>
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`rounded border px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider transition hover:opacity-80 ${meta.color}`}
+                    >
+                      View
+                    </a>
+                    {item.add_to_cart ? (
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded border border-emerald-500/50 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider text-emerald-200 transition hover:bg-emerald-500/25"
+                      >
+                        Cart →
+                      </a>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {a.image_search ? (
+        <div className="flex flex-wrap gap-1.5">
+          <LinkButton href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(a.image_search)}`}>
+            Images
+          </LinkButton>
+          <LinkButton href={googleSearchUrl(a.image_search + " reviews")}>Reviews</LinkButton>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+// --- Food & Order --------------------------------------------------------
+
+function FoodOrderCard({ a }: { a: FoodOrderArtifact }) {
+  const [tab, setTab] = useState<"order" | "recipe">("order");
+
+  const PLATFORM_ICON: Record<string, string> = {
+    doordash: "🚗",
+    "uber eats": "🚙",
+    grubhub: "🍔",
+    instacart: "🛒",
+  };
+
+  return (
+    <Card title={`Food${a.cuisine ? ` · ${a.cuisine}` : ""}`} subtitle={a.dish} tone="success">
+      {/* Tab switcher */}
+      <div className="flex gap-1 rounded-xl border border-slate-700/50 bg-slate-900/50 p-1">
+        {(["order", "recipe"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`flex-1 rounded-lg py-1.5 text-[11px] font-mono uppercase tracking-wider transition ${
+              tab === t
+                ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/30"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            {t === "order" ? "🚗 Order" : "👨‍🍳 Recipe"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "order" ? (
+        <div className="flex flex-col gap-2">
+          {a.order_options?.length ? (
+            <div className="flex flex-col gap-1.5">
+              {a.order_options.map((opt, i) => {
+                const icon = PLATFORM_ICON[opt.platform.toLowerCase()] ?? "🍽️";
+                return (
+                  <a
+                    key={i}
+                    href={opt.url ?? "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 rounded-lg border border-slate-700/60 bg-slate-900/50 px-3 py-2.5 transition hover:border-emerald-500/40 hover:bg-emerald-500/5"
+                  >
+                    <span className="text-xl">{icon}</span>
+                    <div className="flex-1">
+                      <div className="text-[13.5px] font-semibold text-slate-100">{opt.platform}</div>
+                      {opt.search_query ? (
+                        <div className="text-[11px] text-slate-500">"{opt.search_query}"</div>
+                      ) : null}
+                    </div>
+                    <span className="text-[11px] text-emerald-400">Order →</span>
+                  </a>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[12.5px] text-slate-500">No delivery options found.</p>
+          )}
+          {a.nearby_query ? (
+            <a
+              href={googleMapsUrl(a.nearby_query)}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-2 rounded-lg border border-slate-700/40 bg-slate-900/40 px-3 py-2 text-[12px] text-slate-300 transition hover:border-emerald-500/30 hover:text-emerald-200"
+            >
+              <span>📍</span>
+              <span>Find nearby restaurants</span>
+            </a>
+          ) : null}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {a.recipe?.time_min ? (
+            <Pill tone="emerald">⏱ {a.recipe.time_min} min</Pill>
+          ) : null}
+          {a.recipe?.ingredients?.length ? (
+            <div>
+              <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">Ingredients</div>
+              <Bullets items={a.recipe.ingredients} />
+            </div>
+          ) : null}
+          {a.recipe?.steps?.length ? (
+            <div>
+              <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">Steps</div>
+              <ol className="ml-5 list-decimal space-y-1 text-[13px] text-slate-200 marker:text-emerald-400/60">
+                {a.recipe.steps.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// --- Weather -------------------------------------------------------------
+
+const WEATHER_ICON_MAP: [string, string][] = [
+  ["sunny", "☀️"],
+  ["clear", "☀️"],
+  ["partly cloudy", "⛅"],
+  ["mostly cloudy", "🌥️"],
+  ["overcast", "☁️"],
+  ["cloudy", "☁️"],
+  ["drizzle", "🌦️"],
+  ["thunderstorm", "⛈️"],
+  ["stormy", "⛈️"],
+  ["rainy", "🌧️"],
+  ["rain", "🌧️"],
+  ["snowy", "❄️"],
+  ["snow", "❄️"],
+  ["foggy", "🌫️"],
+  ["fog", "🌫️"],
+  ["windy", "💨"],
+  ["hazy", "🌫️"],
+];
+
+function weatherIcon(condition?: string): string {
+  if (!condition) return "🌡️";
+  const lc = condition.toLowerCase();
+  for (const [key, icon] of WEATHER_ICON_MAP) {
+    if (lc.includes(key)) return icon;
+  }
+  return "🌡️";
+}
+
+function WeatherCard({ a }: { a: WeatherArtifact }) {
+  const icon = weatherIcon(a.condition);
+  const weatherUrl = a.weather_query
+    ? `https://www.google.com/search?q=${encodeURIComponent(a.weather_query)}`
+    : `https://weather.com/weather/today`;
+
+  return (
+    <Card title={`Weather${a.location ? ` · ${a.location}` : ""}`} tone="info">
+      {/* Current conditions hero */}
+      <div className="flex items-center gap-4 rounded-xl border border-slate-700/40 bg-slate-900/50 px-4 py-3">
+        <span className="text-5xl leading-none">{icon}</span>
+        <div className="flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[36px] font-light leading-none text-slate-100">
+              {a.temperature_f ?? "—"}°
+            </span>
+            <span className="text-[13px] text-slate-400">F</span>
+            {a.temperature_c != null ? (
+              <span className="text-[13px] text-slate-500">/ {a.temperature_c}°C</span>
+            ) : null}
+          </div>
+          <div className="mt-0.5 text-[13px] text-slate-300">{a.condition ?? "Unknown"}</div>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-3 gap-1.5">
+        {a.feels_like_f != null ? (
+          <div className="flex flex-col items-center rounded-lg border border-slate-800 bg-slate-950/40 py-2">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">Feels like</span>
+            <span className="mt-0.5 text-[13px] font-medium text-slate-200">{a.feels_like_f}°F</span>
+          </div>
+        ) : null}
+        {a.humidity != null ? (
+          <div className="flex flex-col items-center rounded-lg border border-slate-800 bg-slate-950/40 py-2">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">Humidity</span>
+            <span className="mt-0.5 text-[13px] font-medium text-slate-200">{a.humidity}%</span>
+          </div>
+        ) : null}
+        {a.wind_mph != null ? (
+          <div className="flex flex-col items-center rounded-lg border border-slate-800 bg-slate-950/40 py-2">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">Wind</span>
+            <span className="mt-0.5 text-[13px] font-medium text-slate-200">
+              {a.wind_mph} mph {a.wind_direction ?? ""}
+            </span>
+          </div>
+        ) : null}
+      </div>
+
+      {/* 5-day forecast */}
+      {a.forecast?.length ? (
+        <div>
+          <div className="mb-1.5 text-[10px] font-mono uppercase tracking-wider text-slate-500">Forecast</div>
+          <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+            {a.forecast.map((day, i) => (
+              <div
+                key={i}
+                className="flex min-w-[56px] flex-col items-center gap-0.5 rounded-lg border border-slate-800 bg-slate-950/40 px-2 py-2"
+              >
+                <span className="text-[10px] font-mono text-slate-400">{day.day}</span>
+                <span className="text-lg leading-none">{weatherIcon(day.condition)}</span>
+                <span className="text-[11px] font-medium text-slate-200">{day.high_f ?? "—"}°</span>
+                <span className="text-[10px] text-slate-500">{day.low_f ?? "—"}°</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-1.5">
+        <LinkButton href={weatherUrl}>Full forecast</LinkButton>
+      </div>
+    </Card>
+  );
+}
+
+// --- Restaurant booking --------------------------------------------------
+
+function StarRating({ rating }: { rating?: number }) {
+  if (rating == null) return null;
+  const full = Math.floor(rating);
+  const half = rating - full >= 0.5;
+  return (
+    <span className="flex items-center gap-0.5 text-[12px]">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <span key={i} className={i < full ? "text-amber-400" : half && i === full ? "text-amber-400/60" : "text-slate-700"}>
+          ★
+        </span>
+      ))}
+      <span className="ml-1 font-mono text-[11px] text-slate-400">{rating.toFixed(1)}</span>
+    </span>
+  );
+}
+
+function RestaurantBookingCard({ a }: { a: RestaurantBookingArtifact }) {
+  const openTableUrl = a.opentable_url
+    ?? `https://www.opentable.com/s/?term=${encodeURIComponent(a.opentable_query ?? a.name ?? "")}`;
+  const mapsUrl = googleMapsUrl(a.map_query ?? a.name ?? "");
+  const phoneUrl = a.phone ? `tel:${a.phone.replace(/\s/g, "")}` : null;
+
+  return (
+    <Card
+      title={`Restaurant${a.cuisine ? ` · ${a.cuisine}` : ""}`}
+      subtitle={a.name}
+      tone="success"
+      actions={a.price_level ? <Pill tone="amber">{a.price_level}</Pill> : undefined}
+    >
+      <div className="flex items-center gap-3">
+        <StarRating rating={a.rating} />
+      </div>
+
+      {a.description ? (
+        <p className="text-[12.5px] leading-relaxed text-slate-300">{a.description}</p>
+      ) : null}
+
+      <div className="flex flex-col gap-1 text-[12.5px] text-slate-400">
+        {a.address ? (
+          <div className="flex items-start gap-1.5">
+            <span className="shrink-0">📍</span>
+            <span>{a.address}</span>
+          </div>
+        ) : null}
+        {a.hours ? (
+          <div className="flex items-start gap-1.5">
+            <span className="shrink-0">🕐</span>
+            <span>{a.hours}</span>
+          </div>
+        ) : null}
+        {a.phone ? (
+          <div className="flex items-start gap-1.5">
+            <span className="shrink-0">📞</span>
+            <span>{a.phone}</span>
+          </div>
+        ) : null}
+      </div>
+
+      {/* CTAs */}
+      <a
+        href={openTableUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="flex items-center justify-center gap-2 rounded-xl border border-orange-500/50 bg-orange-500/15 py-2.5 text-[13px] font-semibold text-orange-200 transition hover:bg-orange-500/25"
+      >
+        🗓️ Book on OpenTable
+      </a>
+
+      <div className="flex flex-wrap gap-1.5">
+        <LinkButton href={mapsUrl}>Directions</LinkButton>
+        {phoneUrl ? <LinkButton href={phoneUrl}>Call</LinkButton> : null}
+        <LinkButton href={googleSearchUrl((a.name ?? "") + " reviews")}>Reviews</LinkButton>
+      </div>
+    </Card>
+  );
+}
+
+// --- Flight tracker ------------------------------------------------------
+
+function FlightTrackCard({ a }: { a: FlightTrackArtifact }) {
+  const trendIcon =
+    a.price_trend === "rising" ? "↑" : a.price_trend === "falling" ? "↓" : "→";
+  const trendColor =
+    a.price_trend === "rising"
+      ? "text-red-400"
+      : a.price_trend === "falling"
+        ? "text-emerald-400"
+        : "text-slate-400";
+
+  const googleFlightsUrl = a.google_flights_url ?? "https://www.google.com/travel/flights";
+  const kayakUrl = a.kayak_url ?? `https://www.kayak.com/flights`;
+
+  return (
+    <Card title="Flight" tone="info">
+      {/* Route + price hero */}
+      <div className="flex items-center gap-3 rounded-xl border border-slate-700/40 bg-slate-900/50 px-4 py-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 text-[15px] font-semibold text-slate-100">
+            {a.route ?? `${a.origin ?? "?"} → ${a.destination ?? "?"}`}
+          </div>
+          <div className="mt-0.5 flex flex-wrap gap-2 text-[12px] text-slate-400">
+            {a.airline ? <span>✈️ {a.airline}</span> : null}
+            {a.flight_number ? <span className="font-mono">{a.flight_number}</span> : null}
+            {a.duration ? <span>⏱ {a.duration}</span> : null}
+          </div>
+        </div>
+        <div className="text-right">
+          {a.current_price ? (
+            <div className="text-[22px] font-light text-slate-100">{a.current_price}</div>
+          ) : null}
+          {a.price_trend ? (
+            <div className={`flex items-center justify-end gap-1 text-[12px] font-mono font-semibold ${trendColor}`}>
+              <span>{trendIcon}</span>
+              <span>{a.price_trend}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1 text-[12.5px] text-slate-400">
+        {a.departure_date ? (
+          <div className="flex items-center gap-1.5">
+            <span>📅</span>
+            <span>{a.departure_date}</span>
+          </div>
+        ) : null}
+        {a.typical_price_range ? (
+          <div className="flex items-center gap-1.5">
+            <span>💰</span>
+            <span>Typical range: <span className="text-slate-300">{a.typical_price_range}</span></span>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        <a
+          href={googleFlightsUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-sky-200 transition hover:bg-sky-500/20"
+        >
+          Google Flights
+        </a>
+        <a
+          href={kayakUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-slate-700/70 bg-slate-900/70 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-300 transition hover:border-sky-500/50 hover:text-sky-200"
+        >
+          Kayak
+        </a>
+        <a
+          href={`https://www.google.com/travel/flights`}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-slate-700/70 bg-slate-900/70 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-300 transition hover:border-amber-500/50 hover:text-amber-200"
+        >
+          🔔 Track price
+        </a>
+      </div>
+    </Card>
+  );
+}
+
+// --- Email compose -------------------------------------------------------
+
+function EmailComposeCard({ a }: { a: EmailComposeArtifact }) {
+  const body = a.body ?? "";
+  const gmailUrl = `https://mail.google.com/mail/?view=cm${
+    a.to_email ? `&to=${encodeURIComponent(a.to_email)}` : ""
+  }${a.subject ? `&su=${encodeURIComponent(a.subject)}` : ""}${
+    body ? `&body=${encodeURIComponent(body)}` : ""
+  }`;
+  const outlookUrl = `https://outlook.live.com/mail/0/deeplink/compose?${
+    a.to_email ? `to=${encodeURIComponent(a.to_email)}&` : ""
+  }${a.subject ? `subject=${encodeURIComponent(a.subject)}&` : ""}${
+    body ? `body=${encodeURIComponent(body)}` : ""
+  }`;
+
+  return (
+    <Card
+      title={`Email${a.tone ? ` · ${a.tone}` : ""}`}
+      tone="neutral"
+      actions={body ? <CopyButton text={body} label="Copy" /> : undefined}
+    >
+      {/* Email header */}
+      <div className="rounded-t-lg border border-slate-700/60 bg-slate-950/40 px-3 pt-2.5 pb-0">
+        <div className="flex items-baseline gap-1.5 border-b border-slate-800 pb-1.5 text-[12px]">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">To</span>
+          <span className="text-slate-200 font-medium">{a.to_name ?? "—"}</span>
+          {a.to_email ? (
+            <span className="text-slate-500">&lt;{a.to_email}&gt;</span>
+          ) : null}
+        </div>
+        {a.subject ? (
+          <div className="flex items-baseline gap-1.5 py-1.5 text-[12px]">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">Subject</span>
+            <span className="text-slate-200">{a.subject}</span>
+          </div>
+        ) : null}
+      </div>
+      {/* Body */}
+      <div className="whitespace-pre-wrap rounded-b-lg border-x border-b border-slate-700/60 bg-slate-950/40 px-3 py-2.5 text-[13px] leading-relaxed text-slate-200">
+        {body || <span className="text-slate-600 italic">No body generated.</span>}
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        <a
+          href={gmailUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-red-200 transition hover:bg-red-500/20"
+        >
+          Open Gmail
+        </a>
+        <a
+          href={outlookUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-sky-200 transition hover:bg-sky-500/20"
+        >
+          Outlook
+        </a>
+      </div>
+    </Card>
+  );
+}
+
+// --- Job apply -----------------------------------------------------------
+
+function JobApplyCard({ a }: { a: JobApplyArtifact }) {
+  const applyUrl = a.application_url ?? (a.company ? googleSearchUrl(a.company + " " + (a.role ?? "") + " apply") : "#");
+
+  return (
+    <Card title="Job" subtitle={a.role} tone="info">
+      {/* Company + meta */}
+      <div className="flex flex-wrap items-center gap-2">
+        {a.company ? (
+          <span className="text-[14px] font-semibold text-slate-200">{a.company}</span>
+        ) : null}
+        {a.location ? <Pill tone="slate">{a.location}</Pill> : null}
+        {a.salary_range ? <Pill tone="emerald">{a.salary_range}</Pill> : null}
+      </div>
+
+      {/* Skills */}
+      {a.key_skills?.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {a.key_skills.map((s, i) => (
+            <Pill key={i} tone="sky">{s}</Pill>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Requirements */}
+      {a.requirements?.length ? (
+        <div>
+          <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">Requirements</div>
+          <Bullets items={a.requirements} />
+        </div>
+      ) : null}
+
+      {/* Notes */}
+      {a.notes?.length ? (
+        <div>
+          <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-amber-400/70">Notes</div>
+          <Bullets items={a.notes} />
+        </div>
+      ) : null}
+
+      {/* CTAs */}
+      <div className="flex flex-wrap gap-1.5">
+        <a
+          href={applyUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border border-emerald-500/50 bg-emerald-500/15 px-3 py-1.5 text-[11px] font-mono font-semibold uppercase tracking-wider text-emerald-200 transition hover:bg-emerald-500/25"
+        >
+          Apply Now →
+        </a>
+        {a.linkedin_easy_apply ? (
+          <a
+            href={`https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent((a.role ?? "") + " " + (a.company ?? ""))}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider text-sky-200 transition hover:bg-sky-500/20"
+          >
+            LinkedIn
+          </a>
+        ) : (
+          <LinkButton
+            href={`https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent((a.role ?? "") + " " + (a.company ?? ""))}`}
+          >
+            LinkedIn
+          </LinkButton>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// --- Grocery list --------------------------------------------------------
+
+const GROCERY_CATEGORY_ORDER = ["produce", "meat", "dairy", "bakery", "pantry", "frozen", "other"];
+
+function GroceryListCard({ a }: { a: GroceryListArtifact }) {
+  const items = a.items ?? [];
+  const [checked, setChecked] = useState<Set<number>>(new Set());
+
+  const toggle = (i: number) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, { item: (typeof items)[0]; idx: number }[]>();
+    items.forEach((item, idx) => {
+      const cat = item.category ?? "other";
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push({ item, idx });
+    });
+    return map;
+  }, [items]);
+
+  const sortedCategories = [...grouped.keys()].sort((x, y) => {
+    const xi = GROCERY_CATEGORY_ORDER.indexOf(x);
+    const yi = GROCERY_CATEGORY_ORDER.indexOf(y);
+    return (xi === -1 ? 99 : xi) - (yi === -1 ? 99 : yi);
+  });
+
+  return (
+    <Card
+      title={`Grocery list${a.recipe_name ? ` · ${a.recipe_name}` : ""}`}
+      subtitle={
+        a.servings
+          ? `${a.servings} servings · ${items.length} items`
+          : `${items.length} items`
+      }
+      tone="success"
+    >
+      <div className="flex flex-col gap-3">
+        {sortedCategories.map((cat) => (
+          <div key={cat}>
+            <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">
+              {cat}
+            </div>
+            <div className="flex flex-col gap-0.5">
+              {grouped.get(cat)!.map(({ item, idx }) => (
+                <label
+                  key={idx}
+                  className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1 transition hover:bg-slate-800/40"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked.has(idx)}
+                    onChange={() => toggle(idx)}
+                    className="h-3.5 w-3.5 rounded accent-emerald-500"
+                  />
+                  <span
+                    className={`flex-1 text-[13px] transition ${
+                      checked.has(idx) ? "text-slate-600 line-through" : "text-slate-200"
+                    }`}
+                  >
+                    {item.name}
+                  </span>
+                  {item.quantity ? (
+                    <span className="shrink-0 font-mono text-[11px] text-slate-500">
+                      {item.quantity}
+                    </span>
+                  ) : null}
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {checked.size > 0 ? (
+        <div className="text-[11px] text-slate-500">
+          {checked.size} / {items.length} collected
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-1.5">
+        {a.instacart_query ? (
+          <a
+            href={`https://www.instacart.com/store/all/all?query=${encodeURIComponent(a.instacart_query)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-emerald-200 transition hover:bg-emerald-500/20"
+          >
+            Instacart
+          </a>
+        ) : null}
+        {a.walmart_grocery_query ? (
+          <a
+            href={`https://www.walmart.com/grocery/search?query=${encodeURIComponent(a.walmart_grocery_query)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-md border border-slate-700/70 bg-slate-900/70 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-300 transition hover:border-emerald-500/50 hover:text-emerald-200"
+          >
+            Walmart Grocery
+          </a>
+        ) : null}
+      </div>
     </Card>
   );
 }
