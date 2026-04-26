@@ -208,9 +208,38 @@ export function AnswerPanel() {
         messages: wire,
       };
 
+      // Decide which image to send along with the turn.
+      //  1. If the user explicitly captured a region (Cmd+Ctrl+S), that wins —
+      //     it's a targeted image the user meant to share.
+      //  2. Otherwise take an ambient full-screen snapshot so the model sees
+      //     what's on-screen. Skipped on regenerate (would change context
+      //     between the original and the regen, which is confusing).
+      //  3. On any failure (no Screen Recording permission, capture error)
+      //     fall back to a text-only request — never block the user.
+      let wireImage: string | null = activeImage?.dataUrl ?? null;
+      if (!wireImage && !options.regenerateOfUserId) {
+        try {
+          const t0 = performance.now();
+          const cap = await window.deepFocus?.capture?.fullscreen?.();
+          const ms = Math.round(performance.now() - t0);
+          if (cap?.dataUrl) {
+            wireImage = cap.dataUrl;
+            console.info(
+              `[chat] attached ambient full-screen capture (${cap.width}×${cap.height}, ${ms}ms)`,
+            );
+          } else {
+            console.info(
+              `[chat] ambient capture unavailable (${ms}ms) — sending text-only`,
+            );
+          }
+        } catch (err) {
+          console.warn("[chat] ambient capture threw — sending text-only:", err);
+        }
+      }
+
       try {
-        if (activeImage?.dataUrl) {
-          await streamVision({ ...handlers, imageDataUrl: activeImage.dataUrl });
+        if (wireImage) {
+          await streamVision({ ...handlers, imageDataUrl: wireImage });
         } else {
           await streamChat(handlers);
         }

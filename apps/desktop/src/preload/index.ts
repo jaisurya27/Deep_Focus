@@ -88,6 +88,20 @@ const api = {
       return ipcRenderer.invoke(IPC.WINDOW_CONTEXT_GET);
     },
   },
+  capture: {
+    /**
+     * Grab the active display's current pixels (panel hidden from frame) and
+     * return a downscaled data URL. Returns null if capture failed (permission
+     * missing, desktopCapturer returned nothing, etc.) — callers should fall
+     * back to a text-only request in that case.
+     */
+    async fullscreen(): Promise<
+      | { dataUrl: string; width: number; height: number }
+      | null
+    > {
+      return ipcRenderer.invoke(IPC.CAPTURE_FULLSCREEN);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld("deepFocus", api);

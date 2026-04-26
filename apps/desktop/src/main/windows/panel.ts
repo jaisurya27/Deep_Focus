@@ -55,6 +55,22 @@ export async function createPanelWindow(): Promise<BrowserWindow> {
   panel.setAlwaysOnTop(true, "screen-saver");
   panel.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
+  // Forward the panel renderer's console messages to the main terminal so the
+  // user can watch capture timings, provider fallbacks, IPC events, etc.
+  // without opening the panel's DevTools (which steals focus from the
+  // composer and from apps the user is reading behind the panel).
+  panel.webContents.on("console-message", (_event, level, message) => {
+    // Skip noisy devtools/vite/react infrastructure lines.
+    if (
+      message.startsWith("[vite]") ||
+      message.includes("Download the React DevTools")
+    ) {
+      return;
+    }
+    const tag = level === 2 ? "warn" : level === 3 ? "error" : "info";
+    console.info(`[panel-console:${tag}] ${message}`);
+  });
+
   if (DEV_URL) {
     // Vite dev server serves the renderer at this base URL.
     const sep = DEV_URL.endsWith("/") ? "" : "/";

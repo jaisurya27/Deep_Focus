@@ -20,6 +20,7 @@ export const IPC = {
   OVERLAY_REQUEST_START: "overlay:request-start",
   OVERLAY_COMPLETE: "overlay:complete",
   OVERLAY_CANCEL: "overlay:cancel",
+  CAPTURE_FULLSCREEN: "capture:fullscreen",
   HISTORY_OPEN: "history:open",
   HISTORY_LIST: "history:list",
   SETTINGS_OPEN: "settings:open",

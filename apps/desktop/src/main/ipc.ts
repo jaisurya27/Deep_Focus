@@ -2,6 +2,7 @@ import { app, ipcMain, safeStorage } from "electron";
 
 import { IPC, type Settings } from "../shared/ipc";
 import { getActiveWindowContext } from "./context/active-window";
+import { captureFullScreen } from "./capture/fullscreen";
 import { getSettings, setSettings, getSecret, setSecret } from "./settings";
 import { registerHotkeys } from "./hotkeys";
 import { openHistoryWindow } from "./windows/history";
@@ -32,6 +33,10 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.WINDOW_CONTEXT_GET, async () => {
     return getActiveWindowContext().catch(() => null);
+  });
+
+  ipcMain.handle(IPC.CAPTURE_FULLSCREEN, async () => {
+    return captureFullScreen();
   });
 
   ipcMain.on(IPC.HISTORY_OPEN, () => {
