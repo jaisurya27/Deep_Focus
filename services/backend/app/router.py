@@ -67,17 +67,19 @@ def _router_system_prompt(catalog: list[dict]) -> str:
         "single best artifact action for the given context and user intent.\n\n"
         "Available actions:\n"
         f"{items}\n\n"
-        "Rules:\n"
-        "- If the captured content is clearly code, an error/trace, a chart, "
-        "  a UI screenshot, an equation, a recipe/dish photo, a product, a "
-        "  landmark, a to-do list, an email, or a diagram, pick the specialized "
-        "  action. Be decisive when the signal is strong.\n"
-        "- If nothing specialized fits, or the user is just having a "
-        "  conversation, pick `answer` and produce prose.\n"
-        "- `alternatives` should list up to 2 other plausible actions so the "
-        "  UI can offer 'try this instead' chips.\n"
-        "- Respect the user's explicit instruction if present; never override "
-        "  a clear 'translate this' with something else.\n\n"
+        "Rules (in priority order):\n"
+        "1. USER INSTRUCTION WINS. If the user said 'explain', 'elaborate', "
+        "   'summarize', 'translate', 'rewrite', 'fix', 'solve', 'reply', etc., "
+        "   honour that intent and pick the matching action — even if an image "
+        "   is also present. Never let the image override a clear instruction.\n"
+        "2. SELECTED TEXT IS PRIMARY CONTEXT. When captured text is present "
+        "   alongside an image, the text is what the user highlighted — treat "
+        "   it as the main subject. The image is ambient background context.\n"
+        "3. IMAGE-ONLY SPECIALISATION. Only pick a visual action (critique_ui, "
+        "   explain_chart, identify, recipe, diagram_to_mermaid) when there is "
+        "   NO captured text AND NO explicit instruction that points elsewhere.\n"
+        "4. FALLBACK. If nothing specialized fits, pick `answer`.\n"
+        "- `alternatives` should list up to 2 other plausible actions.\n\n"
         "Respond with a SINGLE JSON object, no prose, no fences, shape:\n"
         '{"action":"<id>","alternatives":[{"id":"<id>","reason":"…"}],"reason":"<1 sentence>"}'
     )
@@ -262,7 +264,10 @@ def _heuristic_route(
         if len(body) > 280:
             return pick("answer", ["rewrite", "translate"], "Long passage — summarize/prose.")
 
-    if has_image:
+    # Image-only specialisation: only when there is no text body and no
+    # instruction that points at a text action. If there IS text or an
+    # explicit generic instruction (like "elaborate"), fall through to answer.
+    if has_image and not body and not instr:
         return pick("identify", ["critique_ui", "explain_chart"], "Image-only context.")
 
     return pick("answer", [], "Fallback — free-form answer.")
