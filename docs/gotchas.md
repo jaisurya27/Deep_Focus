@@ -61,6 +61,31 @@ that must not be reverted without a better replacement.
   the `window.deepFocus.*` preload bridge, Electron bundle paths, and
   persisted settings keys all depend on it. The rename is *visible UI only*.
 
+## Region capture overlay
+
+- **Do NOT re-introduce an `OVERLAY_START` IPC handshake from main to the
+  overlay renderer.** We tried; main sent the message on `did-finish-load`,
+  before React's `useEffect` had subscribed, so every capture fell into a
+  `no-overlay-info → cancel` branch and silently did nothing. The overlay now
+  reads `screenX`/`screenY` directly off `PointerEvent` (they're already in
+  global screen-space) — no handshake needed.
+- **Always use `setPointerCapture` + window-level `pointerup`/`mouseup`
+  listeners** for the drag. The pointer frequently leaves the overlay's
+  root div (especially at screen edges); without the window-level fallback
+  the drag never "finishes" and the overlay stays up forever.
+- **Keep passing a `reason` string on `OVERLAY_CANCEL`.** Main logs it. When
+  (not if) this flow breaks again, the log line is the whole debugging
+  story.
+
+## Permission feedback
+
+- **When a macOS permission is missing, surface it in the panel AND let the
+  OS ask.** `systemPreferences.getMediaAccessStatus(...)` + the native
+  dialog alone is not enough — the dialog lands behind fullscreen apps and
+  users think nothing happened. `capture/region.impl.ts` calls
+  `showPanel({ notice: { tone:"warn", … action:{ href:"x-apple.systempreferences:..." }}})`
+  on a miss. Keep this pattern for any future OS-gated feature.
+
 ## Platform specifics
 
 - **`ELECTRON_RUN_AS_NODE`** must be unset. `pnpm dev:desktop` scrubs it via

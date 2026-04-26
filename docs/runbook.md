@@ -32,7 +32,11 @@ On first launch:
 - macOS will ask for Accessibility (for selected-text capture) on the first
   `Cmd+Ctrl+J`.
 - macOS will ask for Screen Recording (for region capture) on the first
-  `Cmd+Ctrl+S`. Grant and retry.
+  `Cmd+Ctrl+S`. Grant and retry. If permission is missing, the Glance panel
+  itself will also pop open with a warning banner + "Open System Settings"
+  button (which deep-links to the right pane via `x-apple.systempreferences:`).
+  After toggling Screen Recording, **quit and relaunch the app** — macOS
+  does not re-check the permission within a running process.
 
 ## Smoke tests
 
@@ -95,6 +99,9 @@ If main doesn't rebuild after a change, check for a TS error in the terminal.
 | Shadows clipped into a rectangle | `HALO_MARGIN` too small OR `roundedCorners: true` reintroduced | see `docs/ui-shell.md` |
 | Orb washed out on white bg | `brightness(>100%)` added back to an acrylic class | see `docs/gotchas.md` |
 | Orb can't be dragged | `-webkit-app-region` reintroduced | delete it; rely on `pointerdown/move/up` flow |
+| `Cmd+Ctrl+S` shows the overlay but chat stays empty | overlay bailed with a `no-overlay-info` / `too-small` cancel reason (see main terminal) | inspect the `[region] OVERLAY_CANCEL received — reason=…` log; don't re-introduce an `OVERLAY_START` handshake (see `docs/gotchas.md`) |
+| Region capture does nothing, no overlay | Screen Recording permission missing | grant in System Settings → Privacy & Security → Screen Recording, then quit + relaunch |
+| Composer × cleared my selection | you're on an old build — modern shell uses `minimizeShell` which preserves context. Only `Cmd+K` is destructive | rebuild; see `docs/ui-shell.md` |
 
 ## Packaging (post-hack)
 

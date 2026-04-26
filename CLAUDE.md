@@ -184,6 +184,18 @@ services/backend/        FastAPI on 127.0.0.1:8765
 - **Don't mass-rename `deep-focus` → `glance` in code.** IPC channels, preload
   bridge, settings keys, and bundle paths all depend on it. Only the visible UI
   says Glance.
+- **Documentation is not optional.** Every meaningful behavior change, new IPC
+  channel, new shell component, new guardrail, or new gotcha MUST be reflected
+  in `docs/` in the same commit/turn as the code change. At minimum:
+  - `docs/changelog.md` — add a dated entry summarizing the change.
+  - `docs/ui-shell.md` — if the orb/panel/composer/artifact UX moved.
+  - `docs/ipc.md` — if any IPC channel or preload API shape changed.
+  - `docs/gotchas.md` — if you discovered a trap (e.g. a startup race, a
+    permission quirk) that a future you must not re-introduce.
+  - `docs/runbook.md` — if the dev-loop or permission steps changed.
+  Before ending a turn that touches code, re-read the docs list in
+  `docs/README.md` and decide which files need updates. Treat missing doc
+  updates as an unfinished task.
 
 ---
 

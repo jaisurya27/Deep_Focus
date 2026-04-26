@@ -350,3 +350,141 @@ body { background: transparent !important; }
 /* Scrollbar inside the floating artifact stays subtle. */
 .stage-scroll::-webkit-scrollbar { width: 6px; }
 .stage-scroll::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.25); border-radius: 9999px; }
+
+/* Floating answer card ------------------------------------------------- */
+.glance-answer::-webkit-scrollbar { width: 6px; }
+.glance-answer::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 9999px; }
+
+/* Soft traveling emerald glow ringing the answer card while streaming. */
+.glance-streaming-border {
+  position: relative;
+  isolation: isolate;
+}
+.glance-streaming-border::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--angle, 0deg),
+    rgba(16, 185, 129, 0.85),
+    rgba(56, 189, 248, 0.55),
+    rgba(167, 139, 250, 0.55),
+    rgba(244, 114, 182, 0.45),
+    rgba(16, 185, 129, 0.85)
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  animation: glance-spin-border 4s linear infinite;
+  pointer-events: none;
+  z-index: -1;
+  filter: blur(0.4px);
+}
+@property --angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes glance-spin-border {
+  to { --angle: 360deg; transform: rotate(360deg); }
+}
+
+/* Blinking caret at the tail of streaming text. */
+.glance-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -2px;
+  border-radius: 1.5px;
+  background: linear-gradient(180deg, #6ee7b7, #10b981);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+  animation: glance-caret-blink 1s steps(2, end) infinite;
+}
+@keyframes glance-caret-blink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0.15; }
+}
+
+/* Animated ellipsis after "Thinking". */
+.glance-dots {
+  display: inline-flex;
+  gap: 2px;
+  vertical-align: baseline;
+}
+.glance-dots span {
+  width: 3px;
+  height: 3px;
+  margin-top: 10px;
+  border-radius: 9999px;
+  background: rgb(148, 163, 184);
+  animation: glance-dot 1.25s ease-in-out infinite;
+}
+.glance-dots span:nth-child(2) { animation-delay: 140ms; }
+.glance-dots span:nth-child(3) { animation-delay: 280ms; }
+@keyframes glance-dot {
+  0%, 80%, 100% { transform: translateY(0);   opacity: 0.35; }
+  40%           { transform: translateY(-3px); opacity: 1; }
+}
+
+/* Shimmer placeholder bars (pre-first-token). */
+.glance-shimmer {
+  background: linear-gradient(
+    110deg,
+    rgba(148, 163, 184, 0.12) 0%,
+    rgba(148, 163, 184, 0.28) 35%,
+    rgba(148, 163, 184, 0.12) 70%
+  );
+  background-size: 220% 100%;
+  animation: glance-shimmer-sweep 1.6s ease-in-out infinite;
+}
+@keyframes glance-shimmer-sweep {
+  0%   { background-position: 110% 0; }
+  100% { background-position: -10% 0; }
+}
+
+/* Aurora bead — a tiny ChatGPT-voice-mode-style glowing sphere that lives
+   inside the inline thinking pill. 28px orb with a spinning multi-hue
+   halo and a gentle breathing scale, sized to feel alive but not dominant. */
+.aurora-bead {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border-radius: 9999px;
+  overflow: hidden;
+  flex: none;
+  background: radial-gradient(circle at 50% 45%, rgba(16, 185, 129, 0.65), rgba(2, 6, 23, 0.9) 72%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 4px 16px -2px rgba(16, 185, 129, 0.55),
+    0 0 14px 2px rgba(56, 189, 248, 0.28);
+  animation: aurora-breathe 2.6s ease-in-out infinite;
+}
+.aurora-bead::before,
+.aurora-bead::after {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  border-radius: 9999px;
+  filter: blur(10px);
+  mix-blend-mode: screen;
+}
+.aurora-bead::before {
+  background: conic-gradient(from 0deg, #10b981, #38bdf8, #a78bfa, #f472b6, #10b981);
+  animation: aurora-spin 3s linear infinite;
+  opacity: 0.95;
+}
+.aurora-bead::after {
+  background:
+    radial-gradient(circle at 30% 30%, #34d399 0%, rgba(52, 211, 153, 0) 55%),
+    radial-gradient(circle at 70% 70%, #a78bfa 0%, rgba(167, 139, 250, 0) 55%),
+    radial-gradient(circle at 40% 80%, #38bdf8 0%, rgba(56, 189, 248, 0) 55%);
+  animation: aurora-pulse 2.1s ease-in-out infinite;
+}
+@keyframes aurora-spin   { to { transform: rotate(360deg); } }
+@keyframes aurora-pulse  {
+  0%, 100% { transform: scale(0.9)  translate(0, 0); opacity: 0.9; }
+  50%      { transform: scale(1.18) translate(1px, -1px); opacity: 1; }
+}
+@keyframes aurora-breathe {
+  0%, 100% { transform: scale(1);    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 4px 16px -2px rgba(16,185,129,0.55), 0 0 14px 2px rgba(56,189,248,0.28); }
+  50%      { transform: scale(1.06); box-shadow: 0 0 0 1px rgba(255,255,255,0.10), 0 6px 20px -2px rgba(16,185,129,0.70), 0 0 22px 3px rgba(167,139,250,0.35); }
+}

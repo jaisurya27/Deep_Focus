@@ -234,8 +234,15 @@ export async function listActions(): Promise<ActionSummary[]> {
   }
 }
 
-export type RunArtifactOptions = {
+export type RoutingInfo = {
   action: string;
+  alternatives: Array<{ id: string; reason?: string }>;
+  reason?: string | null;
+};
+
+export type RunArtifactOptions = {
+  // Pass "auto" to let the backend's router pick the best artifact kind.
+  action: string | "auto";
   text?: string | null;
   imageDataUrl?: string | null;
   userInstruction?: string | null;
@@ -248,6 +255,7 @@ export type RunArtifactOptions = {
     session_id?: string;
   }) => void;
   onProgress?: (chars: number) => void;
+  onRouting?: (routing: RoutingInfo) => void;
 };
 
 // Streams `/artifact` via SSE, resolves with the final ArtifactResponse.
@@ -290,6 +298,15 @@ export async function runArtifact(
               opts.onMeta?.(parsed);
             } catch {
               /* ignore malformed meta */
+            }
+            break;
+          }
+          case "routing": {
+            try {
+              const parsed = JSON.parse(event.data) as RoutingInfo;
+              opts.onRouting?.(parsed);
+            } catch {
+              /* ignore */
             }
             break;
           }

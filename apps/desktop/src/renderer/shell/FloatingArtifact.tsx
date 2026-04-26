@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { motion } from "framer-motion";
 
 import type { Artifact } from "../../shared/artifacts";
 import { ArtifactCard } from "../artifacts/ArtifactCard";
@@ -18,9 +19,12 @@ type Props = {
   onOpenChat?: () => void;
 };
 
+const SPRING = { type: "spring", stiffness: 420, damping: 36, mass: 0.9 } as const;
+
 /**
  * A chromeless floating artifact. The artifact content itself is rendered
- * raw — no card, no border — and a floating action bar sits below it.
+ * raw — no card, no border — and a floating action bar sits below it with
+ * staggered entrance + spring hover/tap.
  */
 export function FloatingArtifact({
   artifact,
@@ -31,24 +35,33 @@ export function FloatingArtifact({
 }: Props) {
   return (
     <div className="flex w-full flex-col items-end gap-2">
-      {/* The artifact body, floating on its own. */}
-      <div className="rise-in max-h-[60vh] w-full overflow-y-auto stage-scroll px-1">
+      <motion.div
+        layout
+        initial={{ opacity: 0, y: 8, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 4, scale: 0.98 }}
+        transition={SPRING}
+        className="max-h-[60vh] w-full overflow-y-auto stage-scroll px-1"
+      >
         <ArtifactCard artifact={artifact} />
-      </div>
+      </motion.div>
 
-      {/* Floating action bar — buttons, no container. */}
-      <div className="slide-down flex flex-wrap items-center justify-end gap-1.5">
+      <motion.div
+        initial="hidden"
+        animate="visible"
+        variants={{
+          hidden: {},
+          visible: { transition: { staggerChildren: 0.045, delayChildren: 0.08 } },
+        }}
+        className="flex flex-wrap items-center justify-end gap-1.5"
+      >
         <ActionButton
           onClick={() => copyArtifact(artifact)}
           icon={<CopyIcon />}
           label="Copy"
         />
         {onRedo ? (
-          <ActionButton
-            onClick={onRedo}
-            icon={<RedoIcon />}
-            label="Redo"
-          />
+          <ActionButton onClick={onRedo} icon={<RedoIcon />} label="Redo" />
         ) : null}
         <ActionButton
           onClick={onFollowUp}
@@ -68,7 +81,7 @@ export function FloatingArtifact({
           label="Dismiss"
           variant="danger"
         />
-      </div>
+      </motion.div>
     </div>
   );
 }
@@ -88,12 +101,21 @@ function ActionButton({
     "ghost-btn" +
     (variant === "danger" ? " danger" : variant === "primary" ? " primary" : "");
   return (
-    <button onClick={onClick} className={cls}>
+    <motion.button
+      variants={{
+        hidden: { opacity: 0, y: 8, scale: 0.92 },
+        visible: { opacity: 1, y: 0, scale: 1, transition: SPRING },
+      }}
+      whileHover={{ scale: 1.05, y: -1 }}
+      whileTap={{ scale: 0.94 }}
+      onClick={onClick}
+      className={cls}
+    >
       <span className="opacity-80">{icon}</span>
       <span className="text-[11px] font-medium uppercase tracking-wider">
         {label}
       </span>
-    </button>
+    </motion.button>
   );
 }
 
@@ -106,9 +128,6 @@ function copyArtifact(a: Artifact) {
 }
 
 function stringify(artifact: Artifact): string {
-  // GenericArtifact's open index signature confuses discriminant narrowing,
-  // so we use a loose alias inside this clipboard helper. The runtime shape
-  // is always one of our typed variants.
   const a = artifact as Record<string, unknown> & { kind: string };
   const arr = (k: string): unknown[] => (Array.isArray(a[k]) ? (a[k] as unknown[]) : []);
   const s = (k: string): string => (typeof a[k] === "string" ? (a[k] as string) : "");
@@ -177,6 +196,8 @@ function stringify(artifact: Artifact): string {
         .join("\n");
     case "travel":
       return [s("name"), s("history")].filter(Boolean).join("\n");
+    case "answer":
+      return [s("title"), s("body")].filter(Boolean).join("\n\n");
     default:
       return JSON.stringify(a, null, 2);
   }

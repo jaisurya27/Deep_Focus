@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import type {
+  AnswerArtifact,
   Artifact,
   CritiqueUiArtifact,
   DiagnoseErrorArtifact,
@@ -20,6 +21,7 @@ import type {
   TranslateArtifact,
   TravelArtifact,
 } from "../../shared/artifacts";
+import { Markdown } from "../lib/markdown";
 
 /**
  * Single entry point. Dispatches on `artifact.kind`; unknown kinds fall
@@ -59,9 +61,35 @@ export function ArtifactCard({ artifact }: { artifact: Artifact }) {
       return <MediaLookupCard a={artifact as MediaLookupArtifact} />;
     case "travel":
       return <TravelCard a={artifact as TravelArtifact} />;
+    case "answer":
+      return <AnswerCard a={artifact as AnswerArtifact} />;
     default:
       return <GenericCard a={artifact as GenericArtifact} />;
   }
+}
+
+function AnswerCard({ a }: { a: AnswerArtifact }) {
+  return (
+    <Card title={a.title ? a.title : "Answer"} tone="neutral">
+      {a.body ? (
+        <div className="glass-quiet rounded-2xl px-4 py-3">
+          <Markdown content={a.body} />
+        </div>
+      ) : null}
+      {a.followups?.length ? (
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {a.followups.map((f, i) => (
+            <span
+              key={i}
+              className="rounded-full border border-slate-700/70 bg-slate-900/50 px-2.5 py-[3px] text-[11px] text-slate-300"
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </Card>
+  );
 }
 
 // --- Shared atoms --------------------------------------------------------

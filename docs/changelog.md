@@ -4,7 +4,125 @@ Chronological record of changes on top of the `Refactor: Deep Focus → Glance`
 commit (110830b). When the branch ships, squash or re-organize into a proper
 changelog.
 
-## 2026-04-25
+## 2026-04-25 — late pass (dismiss actually clears, new capture resets output)
+
+### New capture → fresh slate
+- Previously, firing `Cmd+Ctrl+S` while a prior artifact/answer was still on
+  screen left the *old* output visible and only swapped the `pendingImage`.
+  The shell still showed the stale card (and the context chip + smart crumbs
+  were gated behind `!lastArtifactMsg`, so they never appeared).
+- Added `clearOutput()` on the session store — wipes `messages`,
+  `pendingSelection`, `pendingImage` while preserving `sessionId` and
+  `providerLabel` (so mid-conversation follow-ups still thread on the backend
+  if the user types one before capturing anything new). Called from the
+  `onOpen` IPC handler on every `selection` / `region` payload so each new
+  capture starts clean and immediately shows the new context chip + smart
+  crumbs.
+
+### Dismiss = clear (not just minimize)
+- `FloatingArtifact`'s "Dismiss" button used to call `minimizeShell`, so the
+  artifact came right back the moment the user clicked the orb again. It now
+  calls `clearOutput()` — the card is really gone, composer stays open, ready
+  for the next question.
+- Added a matching close × on the `FloatingAnswer` text card (hidden while
+  streaming to avoid racing the abort button). Tooltip points at Cmd+K for
+  the hard reset.
+- Minimize (composer ×, Esc) is unchanged — still collapses to orb while
+  preserving state. The mental model is now: **×** on the *output* clears
+  output, **×** on the *composer* tucks away, **Cmd+K** wipes everything
+  including session id.
+- Files: `apps/desktop/src/renderer/stores/session.ts`,
+  `apps/desktop/src/renderer/shell/GlanceShell.tsx`.
+
+## 2026-04-25 — evening pass (orb UX overhaul + region-capture fix)
+
+### Region capture actually works now
+- **Root cause of the "select region but nothing shows up" bug:** the overlay
+  renderer was waiting on an `OVERLAY_START` IPC to learn its display's screen
+  origin, but main sent it on `did-finish-load` *before* React's `useEffect`
+  subscriber was attached. The message was missed on every single capture and
+  every drag fell into a `no-overlay-info → cancel` branch.
+- **Fix:** dropped the `OVERLAY_START` handshake entirely. Pointer events
+  already carry `screenX`/`screenY` in global screen-space coordinates; the
+  overlay now records both client and screen coords directly.
+- Added a window-level `pointerup` fallback (plus `setPointerCapture`) so a
+  release that happens off the root div still fires `finishDrag`.
+- Lowered the min-size cancel threshold to 2px and started passing a `reason`
+  string on `OVERLAY_CANCEL` so any future regression is one log line away.
+- File: `apps/desktop/src/renderer/overlay.tsx`.
+
+### Screen-Recording permission: visible feedback in the panel
+- When `systemPreferences.getMediaAccessStatus("screen")` isn't `granted`, we
+  no longer silently bail. We still show the native dialog, but we also call
+  `showPanel({ notice: { tone, title, body, action } })` so the user sees a
+  warning banner in Glance itself with an "Open System Settings" deep-link
+  button — the native dialog can easily end up buried behind fullscreen apps.
+- Added `notice?: { tone, title, body, action }` to `PanelOpenPayload`.
+- New IPC channel `IPC.OPEN_EXTERNAL` with a small allowlist (`http(s)://`,
+  `x-apple.systempreferences:`) and a `window.deepFocus.shell.openExternal`
+  preload method for the banner's action button.
+
+### One universal dismiss gesture
+- The shell used to have four distinct close behaviors (composer ×, context
+  chip ×, artifact ×, Esc) that all did *different* things. Replaced with a
+  single `minimizeShell` that tucks the UI back to the orb and preserves ALL
+  state (context chip, notice, assistant answer, streaming).
+- Context-chip × and notice-banner × are gone. To drop context, start a new
+  capture or hit `Cmd+K` (the only destructive action).
+- Removed `collapseShell`. `dismissArtifact` is now `= minimizeShell`. Esc
+  (when not streaming) also maps to `minimizeShell`.
+- The orb-collapse `useEffect` no longer re-expands on `hasContext` — so a
+  minimize-with-context truly minimizes. Clicking the orb restores state.
+
+### Smart crumbs (replace category-grouped action chips)
+- Removed the `ActionChips` component + its backend `listActions` call. The
+  category tabs (Understand / Act / Discover) and chips (Translate, Solve
+  math, Explain code, …) were cluttering the screen with context-irrelevant
+  options.
+- New `SmartCrumbs` produces 3–5 context-aware one-tap prompts by heuristic
+  over the attached selection / image / `sourceApp`:
+  - For code-ish selections (by sourceApp or content signal): Explain this
+    code, Diagnose error / Find bugs, Improve.
+  - For prose: Explain, TL;DR (on long text), What does this mean?,
+    Translate → English (on non-English), Simplify, Summarize link (on URLs).
+  - For images: Describe, Extract text, Translate → English, Explain, What
+    should I do?.
+- Crumbs fill the composer draft and auto-send.
+
+### New streaming UX (ChatGPT-voice-mode-ish)
+- The old 58px square "THINKING…" blob is gone from the expanded shell. In
+  its place:
+  - **`InlineThinking` pill** replaces the composer while streaming. Contains
+    an `aurora-bead` (30px sphere with conic-gradient halo spin + multi-radial
+    pulse + breathe), a live "Thinking…" label with animated dots, a
+    `chars` counter, and a **Stop** button that aborts the request.
+  - **`StreamingShimmer`** (3 pulsing bars) covers the beat between request
+    sent and first token.
+  - **`FloatingAnswer`** renders plain-text assistant turns as a scrollable
+    card (`white-space: pre-wrap`, max-h 360px, autoscroll to tail). While
+    streaming, it wears a conic-gradient traveling halo (`glance-streaming-border`
+    + `@property --angle`) and a blinking emerald caret (`glance-caret`).
+- Context chip and — when present — the answer card stay visible throughout
+  streaming. Only the composer swaps for the thinking pill. Crumbs hide
+  during a turn and after a turn has produced an answer.
+
+### FIXED: "response is blank" after using a smart crumb
+- The shell previously only rendered `lastArtifactMsg?.artifact`. Plain-text
+  assistant turns (which is what `sendText` — and therefore every smart crumb
+  and every composer submit — produces) were being written to the session
+  store but never shown anywhere in the panel.
+- New `lastAssistantMsg` memo finds the most recent assistant text turn (with
+  content or streaming). `FloatingAnswer` renders it. Artifacts still take
+  precedence when present.
+
+### Misc
+- Composer placeholder switches to "Ask a follow-up…" after an answer lands.
+- `CLAUDE.md`: removed the "No native Node modules" guardrail; any
+  well-maintained npm module (native or otherwise) is now fair game.
+- `CLAUDE.md`: added a mandatory docs-update guardrail — every behavior change
+  must land alongside an update to the right `docs/*.md` file.
+
+## 2026-04-25 — initial Glance shell
 
 ### Acrylic material, tuned for white backgrounds
 - All floating surfaces (`.glass`, `.glass-quiet`, `.ghost-btn`, plus a new

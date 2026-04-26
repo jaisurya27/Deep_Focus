@@ -32,6 +32,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.artifacts import ACTIONS, list_actions, mock_artifact
 from app.providers import get_chat_provider, get_vision_provider
+from app.router import route_action
 from app.store.memory import Exchange, store
 
 logger = logging.getLogger(__name__)
@@ -58,22 +59,33 @@ def actions_index() -> dict:
 
 @router.post("/artifact")
 async def artifact(req: ArtifactRequest) -> EventSourceResponse:
-    spec = ACTIONS.get(req.action)
-    if not spec:
-        raise HTTPException(status_code=400, detail=f"unknown action '{req.action}'")
-
-    has_text = bool((req.text or "").strip())
     has_image = bool((req.image_data_url or "").strip())
-    if spec.needs_text and not has_text and not has_image:
-        raise HTTPException(
-            status_code=400,
-            detail=f"action '{req.action}' needs text context",
-        )
-    if spec.needs_image and not has_image:
-        raise HTTPException(
-            status_code=400,
-            detail=f"action '{req.action}' needs an image",
-        )
+    has_text = bool((req.text or "").strip())
+
+    if req.action == "auto":
+        # Router decides the real action later, inside the stream. We do a
+        # minimal up-front validation (need at least *some* signal).
+        if not has_text and not has_image and not (req.user_instruction or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="action 'auto' needs text, an image, or an instruction",
+            )
+    else:
+        spec = ACTIONS.get(req.action)
+        if not spec:
+            raise HTTPException(
+                status_code=400, detail=f"unknown action '{req.action}'"
+            )
+        if spec.needs_text and not has_text and not has_image:
+            raise HTTPException(
+                status_code=400,
+                detail=f"action '{req.action}' needs text context",
+            )
+        if spec.needs_image and not has_image:
+            raise HTTPException(
+                status_code=400,
+                detail=f"action '{req.action}' needs an image",
+            )
 
     session = store.ensure(req.session_id)
 
@@ -88,7 +100,35 @@ async def _artifact_event_stream(
     session_id: str,
     has_image: bool,
 ) -> AsyncIterator[dict[str, Any]]:
-    spec = ACTIONS[req.action]
+    routed_alternatives: list[dict[str, Any]] = []
+    routed_reason: str | None = None
+    chosen_action = req.action
+
+    if req.action == "auto":
+        routing = await route_action(
+            text=req.text,
+            has_image=has_image,
+            image_data_url=req.image_data_url,
+            user_instruction=req.user_instruction,
+            window_context=req.window_context,
+        )
+        chosen_action = routing["action"]
+        routed_alternatives = routing.get("alternatives") or []
+        routed_reason = routing.get("reason") or None
+        if chosen_action not in ACTIONS:
+            chosen_action = "answer"
+        yield {
+            "event": "routing",
+            "data": json.dumps(
+                {
+                    "action": chosen_action,
+                    "alternatives": routed_alternatives,
+                    "reason": routed_reason,
+                }
+            ),
+        }
+
+    spec = ACTIONS[chosen_action]
     user_payload = _user_payload(req.text, req.user_instruction, spec.label)
 
     # Select provider + build wire payload.
@@ -145,7 +185,7 @@ async def _artifact_event_stream(
     # Mock provider emits prose/placeholder JSON — swap in the richer canned
     # artifact so the UI stays demoable offline.
     if getattr(provider, "name", "") == "mock":
-        data = mock_artifact(req.action, req.text)
+        data = mock_artifact(chosen_action, req.text)
     else:
         raw = "".join(raw_chars)
         data = _parse_json(raw)
@@ -159,12 +199,27 @@ async def _artifact_event_stream(
                 return
             data = {
                 "kind": "generic",
-                "action": req.action,
+                "action": chosen_action,
                 "text": raw.strip(),
                 "notes": ["Model did not return valid JSON; showing raw output."],
             }
 
-    data.setdefault("kind", req.action)
+    data.setdefault("kind", chosen_action)
+
+    # Merge routing alternatives into the artifact's `suggested_alternatives`
+    # so the UI can offer "try X instead" chips even in auto mode. The model's
+    # own `suggested_action` (single, stronger) passes through untouched.
+    if routed_alternatives and "suggested_alternatives" not in data:
+        data["suggested_alternatives"] = [
+            {
+                "id": a.get("id"),
+                "label": ACTIONS[a["id"]].label if a.get("id") in ACTIONS else a.get("id"),
+                "reason": a.get("reason", ""),
+            }
+            for a in routed_alternatives
+            if a.get("id") in ACTIONS
+        ]
+
     _persist(session_id, req, data, provider=provider.name, model=provider.model)
 
     yield {
@@ -176,6 +231,8 @@ async def _artifact_event_stream(
                     "provider": provider.name,
                     "model": provider.model,
                     "session_id": session_id,
+                    "routed_action": chosen_action if req.action == "auto" else None,
+                    "routed_reason": routed_reason,
                 },
             }
         ),
