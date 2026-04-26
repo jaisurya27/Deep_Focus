@@ -1,16 +1,17 @@
 /**
- * Full-screen capture for "share-my-screen on every turn" chat mode.
+ * Silent fullscreen capture.
  *
- * The whole display where the cursor currently lives is turned into a
- * downscaled PNG data URL and handed back to the renderer. The Deep Focus
- * panel is excluded from the frame by fading its opacity to zero for the
- * duration of the capture — this is noticeably cheaper than `hide()/show()`,
- * keeps keyboard focus on the composer, and produces a clean image because
- * the macOS compositor composites the panel at 0% alpha (so what's behind it
- * shows through).
+ * Unlike `startRegionCapture` (which drops a marching-ants overlay), this
+ * snaps the whole display under the cursor with no UI. It's used by the
+ * "smart context" loop: when the user asks "what am I looking at?" the
+ * backend responds with a `needs_context` artifact asking for a screenshot,
+ * and the renderer calls this silently, attaches the result, and re-runs
+ * the same turn.
+ *
+ * Important: we hide the Glance panel window for the duration of the grab
+ * so the orb/composer don't end up inside the frame the vision model sees.
  */
 import {
-  BrowserWindow,
   desktopCapturer,
   screen,
   systemPreferences,
@@ -19,82 +20,87 @@ import {
 
 import { getPanelWindow } from "../windows/panel";
 
-export type FullScreenCapture = {
+export type FullscreenCaptureResult = {
   dataUrl: string;
   width: number;
   height: number;
 };
 
-const MAX_EDGE = 1600;
-// Keep the panel invisible just long enough for the OS compositor to repaint
-// the display underneath. 60 Hz = 16 ms/frame; 3 frames is the sweet spot
-// between "no flash for the user" and "capture is guaranteed clean".
-const HIDE_MS = 50;
+export type FullscreenCaptureError =
+  | { kind: "permission" }
+  | { kind: "no-sources" }
+  | { kind: "failed"; message: string };
 
-export async function captureFullScreen(): Promise<FullScreenCapture | null> {
-  if (!hasScreenRecordingPermission()) {
-    console.warn("[fullscreen] Screen Recording permission missing — skipping capture");
-    return null;
+export type FullscreenCaptureOutcome =
+  | { ok: true; value: FullscreenCaptureResult }
+  | { ok: false; error: FullscreenCaptureError };
+
+export async function captureFullScreen(): Promise<FullscreenCaptureOutcome> {
+  if (process.platform === "darwin") {
+    const status = systemPreferences.getMediaAccessStatus("screen");
+    if (status !== "granted") {
+      return { ok: false, error: { kind: "permission" } };
+    }
   }
 
-  const cursor = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(cursor);
-
+  // Hide the panel so it doesn't show up in the snapshot. We restore it on
+  // our way out, even if capture throws.
   const panel = getPanelWindow();
-  const panelWasVisible = !!(panel && panel.isVisible());
-  const panelOnThisDisplay =
-    panelWasVisible && panel ? isWindowOnDisplay(panel, display) : false;
-
-  if (panelWasVisible && panel && panelOnThisDisplay) {
-    // setOpacity(0) is instant and doesn't disturb focus or the window stack.
-    panel.setOpacity(0);
-    await new Promise((r) => setTimeout(r, HIDE_MS));
+  const wasVisible = !!panel && !panel.isDestroyed() && panel.isVisible();
+  if (wasVisible && panel) {
+    panel.hide();
+    // Give the compositor one frame to actually remove the panel from the
+    // screen before we snapshot.
+    await delay(60);
   }
 
   try {
-    const scale = display.scaleFactor || 1;
-    const thumbSize = {
-      width: Math.round(display.bounds.width * scale),
-      height: Math.round(display.bounds.height * scale),
-    };
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: thumbSize,
-    });
-    if (sources.length === 0) {
-      console.warn("[fullscreen] desktopCapturer returned no sources");
-      return null;
-    }
-    const source = findSourceForDisplay(sources, display) ?? sources[0];
-    const full = source.thumbnail;
-    const resized = maybeResize(full, MAX_EDGE);
-    const dataUrl = resized.toDataURL();
-    const size = resized.getSize();
-    return { dataUrl, width: size.width, height: size.height };
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const result = await snapshotDisplay(display);
+    return { ok: true, value: result };
   } catch (err) {
-    console.warn("[fullscreen] capture failed:", err);
-    return null;
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: { kind: "failed", message } };
   } finally {
-    if (panelWasVisible && panel && !panel.isDestroyed()) {
-      panel.setOpacity(1);
+    if (wasVisible && panel && !panel.isDestroyed()) {
+      panel.showInactive();
     }
   }
 }
 
-function hasScreenRecordingPermission(): boolean {
-  if (process.platform !== "darwin") return true;
-  return systemPreferences.getMediaAccessStatus("screen") === "granted";
-}
-
-function isWindowOnDisplay(win: BrowserWindow, display: Display): boolean {
-  try {
-    const b = win.getBounds();
-    const center = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-    const nearest = screen.getDisplayNearestPoint(center);
-    return nearest.id === display.id;
-  } catch {
-    return false;
+async function snapshotDisplay(
+  display: Display,
+): Promise<FullscreenCaptureResult> {
+  const scale = display.scaleFactor || 1;
+  const thumbSize = {
+    width: Math.round(display.bounds.width * scale),
+    height: Math.round(display.bounds.height * scale),
+  };
+  const sources = await desktopCapturer.getSources({
+    types: ["screen"],
+    thumbnailSize: thumbSize,
+  });
+  if (sources.length === 0) {
+    throw new Error(
+      "desktopCapturer returned no screen sources — Screen Recording permission likely missing.",
+    );
   }
+  const source =
+    sources.find(
+      (s) =>
+        (s as unknown as { display_id?: string }).display_id ===
+        String(display.id),
+    ) ?? sources[0];
+  const img = source.thumbnail;
+  // Cap the long edge so the resulting data URL stays within sane request
+  // size for vision models. 1600px matches region capture.
+  const sized = maybeResize(img, 1600);
+  const { width, height } = sized.getSize();
+  return {
+    dataUrl: sized.toDataURL(),
+    width,
+    height,
+  };
 }
 
 function maybeResize(img: Electron.NativeImage, maxEdge: number) {
@@ -109,12 +115,6 @@ function maybeResize(img: Electron.NativeImage, maxEdge: number) {
   });
 }
 
-function findSourceForDisplay(
-  sources: Electron.DesktopCapturerSource[],
-  display: Display,
-): Electron.DesktopCapturerSource | null {
-  const byId = sources.find(
-    (s) => (s as unknown as { display_id?: string }).display_id === String(display.id),
-  );
-  return byId ?? sources[0] ?? null;
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }

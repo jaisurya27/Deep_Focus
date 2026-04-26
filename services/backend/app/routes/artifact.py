@@ -139,6 +139,47 @@ async def _artifact_event_stream(
             ),
         }
 
+    # `needs_context` is the "please capture a screenshot first" escape
+    # hatch. We don't call any model for it — just emit a deterministic
+    # JSON artifact that the frontend knows how to auto-fulfill (capture
+    # the declared signal, then resubmit the same instruction).
+    if chosen_action == "needs_context":
+        provider_name, provider_model = _stub_provider_name()
+        yield {
+            "event": "meta",
+            "data": json.dumps(
+                {
+                    "provider": provider_name,
+                    "model": provider_model,
+                    "session_id": session_id,
+                }
+            ),
+        }
+        needs_data = {
+            "kind": "needs_context",
+            "needs": ["screenshot"],
+            "reason": routed_reason
+            or "Need a screenshot to see what you're looking at.",
+            "retry_instruction": (req.user_instruction or "").strip() or None,
+        }
+        yield {
+            "event": "artifact",
+            "data": json.dumps(
+                {
+                    "artifact": needs_data,
+                    "meta": {
+                        "provider": provider_name,
+                        "model": provider_model,
+                        "session_id": session_id,
+                        "routed_action": "needs_context",
+                        "routed_reason": routed_reason,
+                    },
+                }
+            ),
+        }
+        yield {"event": "done", "data": json.dumps({"session_id": session_id})}
+        return
+
     spec = ACTIONS[chosen_action]
     user_payload = _user_payload(req.text, req.user_instruction, spec.label)
 
@@ -257,6 +298,19 @@ async def _artifact_event_stream(
         ),
     }
     yield {"event": "done", "data": json.dumps({"session_id": session_id})}
+
+
+def _stub_provider_name() -> tuple[str, str]:
+    """Provider label used on synthetic artifacts (needs_context).
+
+    We route through whatever chat provider is configured so the UI's
+    provider badge stays coherent, but without making an API call.
+    """
+    try:
+        p = get_chat_provider()
+        return p.name, p.model
+    except Exception:  # noqa: BLE001
+        return "local", "router"
 
 
 def _pick_json_stream(provider: Any, *, multimodal: bool):

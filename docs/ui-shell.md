@@ -237,9 +237,51 @@ the stack, and dismisses it only via `minimizeShell`. Don't add a per-banner
 close button — that re-introduces the "four different dismiss gestures"
 problem we just fixed.
 
+## Smart-context auto-fulfill loop
+
+Free-form prompts like "what am I looking at?" used to land as a generic
+`answer` with the model apologizing for not being able to see the screen.
+The composer now runs `runAuto(...)` through a two-sided loop that can
+automatically collect missing signals on the user's behalf.
+
+**Fast path.** Before every submit, `GlanceShell` runs the prompt through
+`VISUAL_INTENT_RE` (kept in sync with the backend's heuristic). If it
+matches and no image is attached yet, we call
+`window.deepFocus.capture.fullscreen()` *before* shipping the turn and
+attach the result as `pendingImage`. No round-trip, no visible flicker
+beyond the ~60 ms panel-hide during the grab.
+
+**Slow path.** After any `runArtifact` response, if
+`artifact.kind === "needs_context"` (a meta-artifact emitted by the
+backend router when it decides it needs more signal to answer), the
+shell:
+
+1. Fulfills each declared `need` — currently `"screenshot"`, with
+   `"selection"` / `"active_window"` reserved for future hooks.
+2. Calls `removeMessages([userMsg.id, assistantMsg.id])` to drop the
+   placeholder turn so the transcript doesn't accumulate
+   "thinking…"→"needs_context"→"thinking again…" pairs.
+3. Re-enters `runAuto(retryInstruction, { preferImageDataUrl, _retryDepth: 1 })`
+   with the freshly captured signal.
+
+Retries are capped at depth 1 — a misbehaving model that keeps asking
+for context gets its `needs_context` artifact rendered as a
+`NeedsContextCard` instead, with a clean explanation of what's still
+missing. The same card is shown if we can't fulfill (permission denied):
+the shell also surfaces the Screen-Recording `NoticeBanner` with a deep
+link to System Settings.
+
+Extending the loop to new signals is a three-touch change: (1) teach
+`captureFullScreen` (or add a sibling helper) to produce the signal,
+(2) add a case in `GlanceShell`'s `needs.has(...)` block to attach it,
+(3) teach the backend router when to request it. The shared artifact
+type (`NeedsContextArtifact` in `apps/desktop/src/shared/artifacts.ts`)
+already allows arbitrary `needs[]` strings.
+
 ## Key files
 
 - `apps/desktop/src/renderer/shell/GlanceShell.tsx`
+- `apps/desktop/src/main/capture/fullscreen.ts`
 - `apps/desktop/src/main/windows/panel.ts`
 - `apps/desktop/src/main/ipc.ts` (handlers for `PANEL_SET_CONTENT_SIZE`,
   `PANEL_DRAG_START`, `PANEL_DRAG_MOVE`)

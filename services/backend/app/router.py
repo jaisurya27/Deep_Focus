@@ -35,6 +35,10 @@ def _catalog_for_prompt(*, has_image: bool) -> list[dict]:
     """
     out: list[dict] = []
     for spec in ACTIONS.values():
+        # `needs_context` is the "please capture a screenshot first" escape
+        # hatch — only a legal router pick when nothing visual is attached.
+        if spec.id == "needs_context" and has_image:
+            continue
         if spec.needs_image and not has_image:
             continue
         out.append(
@@ -72,6 +76,10 @@ def _router_system_prompt(catalog: list[dict]) -> str:
         "  a UI screenshot, an equation, a recipe/dish photo, a product, a "
         "  landmark, a to-do list, an email, or a diagram, pick the specialized "
         "  action. Be decisive when the signal is strong.\n"
+        "- If the user is clearly asking about what's visible on their screen "
+        "  (e.g. 'what am I looking at', 'describe my screen', 'read this for me') "
+        "  AND no image is attached, pick `needs_context` so the client can "
+        "  capture a screenshot and retry.\n"
         "- If nothing specialized fits, or the user is just having a "
         "  conversation, pick `answer` and produce prose.\n"
         "- `alternatives` should list up to 2 other plausible actions so the "
@@ -209,6 +217,23 @@ _NON_ENGLISH_RE = re.compile(
 _CODEY_APPS = re.compile(
     r"code|xcode|terminal|iterm|intellij|pycharm|webstorm|vim|nvim|sublime", re.I
 )
+# "what am I looking at", "describe my screen", "read this", "what's on the
+# screen right now" — user is clearly asking about visible content but we
+# don't have an image yet. The router emits `needs_context` so the client
+# auto-captures a screenshot and retries.
+_VISUAL_INTENT_RE = re.compile(
+    r"\b("
+    r"what\s+am\s+i\s+(looking|seeing|viewing)\s+at|"
+    r"what'?s?\s+(on|in)\s+(my|the)\s+screen|"
+    r"describe\s+(my|the|this)\s+(screen|window|page|tab|app)|"
+    r"read\s+(my|the|this)\s+(screen|window)|"
+    r"what\s+is\s+(this|that)\s+(showing|on\s+(my|the)\s+screen)|"
+    r"summarize\s+(my|the|this)\s+(screen|window|page|tab)|"
+    r"explain\s+(my|the|this)\s+(screen|window|page)|"
+    r"help\s+me\s+with\s+(this|what'?s\s+on)"
+    r")\b",
+    re.I,
+)
 
 
 def _heuristic_route(
@@ -233,6 +258,16 @@ def _heuristic_route(
             ][:2],
             "reason": reason,
         }
+
+    # If the user is asking about what's visible but we don't have any
+    # image context yet, signal the client to capture a screenshot and
+    # retry. The frontend auto-fulfills this and re-runs the same turn.
+    if not has_image and _VISUAL_INTENT_RE.search(instr):
+        return pick(
+            "needs_context",
+            ["answer"],
+            "Asking about the screen — need a screenshot to answer.",
+        )
 
     # Explicit user instruction wins.
     if "translate" in instr:

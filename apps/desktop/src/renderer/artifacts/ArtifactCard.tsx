@@ -13,6 +13,7 @@ import type {
   GenericArtifact,
   IdentifyArtifact,
   MediaLookupArtifact,
+  NeedsContextArtifact,
   ProductArtifact,
   RecipeArtifact,
   RewriteArtifact,
@@ -63,9 +64,37 @@ export function ArtifactCard({ artifact }: { artifact: Artifact }) {
       return <TravelCard a={artifact as TravelArtifact} />;
     case "answer":
       return <AnswerCard a={artifact as AnswerArtifact} />;
+    case "needs_context":
+      return <NeedsContextCard a={artifact as NeedsContextArtifact} />;
     default:
       return <GenericCard a={artifact as GenericArtifact} />;
   }
+}
+
+function NeedsContextCard({ a }: { a: NeedsContextArtifact }) {
+  // This only renders when the auto-fulfill loop in GlanceShell couldn't
+  // satisfy the request (e.g. Screen Recording permission denied). In the
+  // happy path the shell swallows `needs_context` and re-runs the turn,
+  // so the user never sees this card.
+  const needsLabel =
+    (a.needs ?? []).map((n) => n.replace(/_/g, " ")).join(", ") || "more context";
+  return (
+    <Card title="Need more context" tone="warn">
+      <div className="glass-quiet rounded-2xl px-4 py-3 text-[13px] text-slate-200">
+        {a.reason ??
+          "Glance needs more context to answer this — typically a screenshot of what you're looking at."}
+        <div className="mt-2 text-[11px] text-slate-400">
+          Asked for: <span className="font-mono text-slate-300">{needsLabel}</span>
+        </div>
+        {a.retry_instruction ? (
+          <div className="mt-2 text-[11.5px] text-slate-300">
+            Your question:{" "}
+            <span className="italic text-slate-200">"{a.retry_instruction}"</span>
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  );
 }
 
 function AnswerCard({ a }: { a: AnswerArtifact }) {

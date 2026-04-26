@@ -4,6 +4,72 @@ Chronological record of changes on top of the `Refactor: Deep Focus → Glance`
 commit (110830b). When the branch ships, squash or re-organize into a proper
 changelog.
 
+## 2026-04-25 — smart context loop: auto-screenshot when the model needs to see the screen
+
+"What am I looking at?" used to stump Glance: with no image attached, the
+artifact router picked `answer` and the model confessed it couldn't see
+the screen. Fixed by wiring a two-sided **smart-context loop** that can
+auto-collect whatever signal the agent decides it's missing.
+
+**Backend** — `services/backend/app/`:
+
+- New meta-action `needs_context` in `artifacts.py`. Router-only (never
+  user-facing). The `/artifact` route *short-circuits* for it — no LLM
+  call, just a deterministic JSON payload:
+  `{kind:"needs_context", needs:["screenshot"], reason, retry_instruction}`.
+- `router.py` now teaches the LLM to pick `needs_context` when the user
+  is clearly asking about on-screen content but nothing visual is
+  attached, and the heuristic fallback does the same via a
+  `_VISUAL_INTENT_RE` regex ("what am I looking at", "describe my
+  screen", "read this for me", etc.). The action is filtered out of the
+  catalog once an image is already attached so the router can't loop.
+
+**Main process** — `apps/desktop/src/main/capture/fullscreen.ts`:
+
+- `captureFullScreen()` silently snaps the display under the cursor via
+  `desktopCapturer` (no overlay UI). Temporarily hides the panel for
+  ~60 ms so the orb/composer don't appear inside the screenshot, then
+  restores it. Returns a downscaled (max edge 1600 px) data URL.
+- Bubbles a structured error envelope instead of throwing so the
+  renderer can distinguish `permission` vs `failed`.
+- Exposed via `ipcMain.handle(IPC.CAPTURE_FULLSCREEN)` and the preload
+  bridge as `window.deepFocus.capture.fullscreen()`.
+
+**Renderer** — `apps/desktop/src/renderer/shell/GlanceShell.tsx`:
+
+- Fast path: before every composer submission, a `VISUAL_INTENT_RE`
+  regex (kept in sync with the backend) auto-captures a screenshot when
+  the prompt clearly asks about the screen and nothing visual is
+  attached yet. Saves a round-trip for the common case.
+- Slow path: after any `runArtifact` response, if the artifact kind is
+  `needs_context`, the shell silently fulfills the declared needs
+  (currently `screenshot`; `selection` / `active_window` are reserved
+  for future hooks), drops the placeholder turn from the transcript,
+  and re-runs the original instruction with the new signal attached.
+- Retries are capped at depth 1 so a misbehaving model can't spin
+  forever. If the capture fails (permission denied), we surface the
+  notice banner with a deep link to System Settings and render a new
+  `NeedsContextCard` (in `ArtifactCard.tsx`) so the user still sees
+  *why* we're stuck.
+- Store gains a small `removeMessages([ids])` action for surgically
+  replacing the placeholder user/assistant pair when auto-fulfilling.
+
+Shape of a `needs_context` artifact (shared type in
+`apps/desktop/src/shared/artifacts.ts`):
+
+```
+{
+  "kind": "needs_context",
+  "needs": ["screenshot" | "selection" | "active_window", …],
+  "reason": "one-sentence why",
+  "retry_instruction": "original user question, preserved"
+}
+```
+
+Extending the loop to new signals is a two-sided change only: add the
+signal id to `needs`, teach the renderer how to collect it, and (if it's
+genuinely new) add a capture helper in the main process.
+
 ## 2026-04-25 — `/artifact` replays session history on follow-ups
 
 Follow-up questions through the composer were reading as cold-start asks:
@@ -33,6 +99,23 @@ Fix in `services/backend/app/routes/artifact.py`:
 "Lazy context" in `CLAUDE.md` means *decide smartly whether to reuse the
 last session or start fresh on a new capture* — it does NOT mean drop
 all memory mid-session.
+
+## 2026-04-25 — keep the user's request visible while streaming
+
+Previously `runAuto`/`runAction` cleared `draft` immediately on submit,
+so during streaming the composer showed the generic `Thinking…`
+placeholder and the user lost sight of what they actually asked. Now:
+
+- Composer keeps the submitted text in the (disabled) textarea while
+  the turn streams, wrapped in the Siri-style glow — so the prompt
+  itself *is* the loading surface.
+- `runAction` (chip clicks / smart crumbs / suggestions) has no typed
+  draft, so we inject a pretty version of the action label into the
+  composer (e.g. "Explain code") during its stream for the same reason.
+- The "clear text" X is hidden while streaming so the request can't be
+  wiped mid-flight — the Stop button is the only way to cancel.
+- `draft` is cleared in the `finally` of both flows so success, error,
+  and abort all end on a clean composer ready for the next ask.
 
 ## 2026-04-25 — kill layout-animation overlap ("rectangle below chat")
 

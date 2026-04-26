@@ -162,6 +162,24 @@ export type AnswerArtifact = {
   followups?: string[];
 };
 
+/**
+ * Smart-context escape hatch. Emitted by the backend when the router sees
+ * that the user is asking about something visual/contextual on their screen
+ * but no image was captured. The renderer fulfills the declared `needs`
+ * (currently just `"screenshot"`) and automatically re-runs the same
+ * instruction, producing a seamless "oh, let me actually look at your
+ * screen" experience instead of a confused "I can't see your screen" reply.
+ */
+export type NeedsContextArtifact = {
+  kind: "needs_context";
+  /** What the frontend should collect before retrying. */
+  needs?: Array<"screenshot" | "selection" | "active_window">;
+  /** Short explanation of why we're asking. */
+  reason?: string;
+  /** The original user instruction, preserved for the retry. */
+  retry_instruction?: string | null;
+};
+
 // Optional fields every artifact kind may carry when the agent wants to
 // suggest a different artifact type for the same context.
 export type SuggestedAction = {
@@ -212,6 +230,7 @@ export type Artifact = (
   | MediaLookupArtifact
   | TravelArtifact
   | AnswerArtifact
+  | NeedsContextArtifact
   | GenericArtifact
 ) &
   WithSuggestions;

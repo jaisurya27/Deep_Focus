@@ -57,6 +57,34 @@ def _json_contract(shape_doc: str) -> str:
 
 
 ACTIONS: dict[str, ActionSpec] = {
+    # --- Smart-context escape hatch --------------------------------------
+    #
+    # Not a real user-facing artifact: emitted when we realize the model
+    # can't answer without more signal (typically a screenshot). The
+    # frontend auto-fulfills the declared `needs` and re-runs the same
+    # instruction, so this produces a seamless "oh wait, let me look at
+    # your screen" loop instead of a confused "I can't see your screen"
+    # answer. The artifact route short-circuits for this action — no LLM
+    # call, just a deterministic JSON payload.
+    "needs_context": ActionSpec(
+        id="needs_context",
+        category="understand",
+        label="Needs context",
+        blurb=(
+            "The user asked about something visual/contextual on their "
+            "screen but didn't attach an image. Frontend should capture "
+            "the declared signal and retry."
+        ),
+        needs_text=False,
+        accepts_image=False,
+        system_prompt="",  # never used — route short-circuits
+        mock=lambda t: {
+            "kind": "needs_context",
+            "needs": ["screenshot"],
+            "reason": "Looks like a question about on-screen content.",
+            "retry_instruction": (t or "").strip() or None,
+        },
+    ),
     # --- Conversational fallback -----------------------------------------
     "answer": ActionSpec(
         id="answer",

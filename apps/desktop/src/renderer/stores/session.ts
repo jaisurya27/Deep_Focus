@@ -58,6 +58,8 @@ type SessionState = {
   failMessage: (id: string, errorText: string) => void;
   updateMessage: (id: string, patch: Partial<ChatMessage>) => void;
   removeLastAssistantFor: (userId: string) => void;
+  /** Drop specific messages by id. Used when auto-fulfilling needs_context. */
+  removeMessages: (ids: string[]) => void;
   setStreaming: (on: boolean) => void;
   setPendingSelection: (sel: AttachedSelection | null) => void;
   setPendingImage: (img: AttachedImage | null) => void;
@@ -125,6 +127,11 @@ export const useSession = create<SessionState>((set) => ({
         }
       }
       return { messages: cleaned };
+    }),
+  removeMessages: (ids) =>
+    set((state) => {
+      const drop = new Set(ids);
+      return { messages: state.messages.filter((m) => !drop.has(m.id)) };
     }),
   setStreaming: (on) => set({ isStreaming: on }),
   setPendingSelection: (sel) => set({ pendingSelection: sel }),

@@ -108,6 +108,29 @@ const api = {
       ipcRenderer.send(IPC.OPEN_EXTERNAL, href);
     },
   },
+  capture: {
+    /**
+     * Silently snap the full display under the cursor. Used by the
+     * "smart context" loop so prompts like "what am I looking at?"
+     * auto-attach a screenshot. Returns the same envelope the main
+     * process produces (no throwing on permission issues).
+     */
+    async fullscreen(): Promise<
+      | {
+          ok: true;
+          value: { dataUrl: string; width: number; height: number };
+        }
+      | {
+          ok: false;
+          error:
+            | { kind: "permission" }
+            | { kind: "no-sources" }
+            | { kind: "failed"; message: string };
+        }
+    > {
+      return ipcRenderer.invoke(IPC.CAPTURE_FULLSCREEN);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld("deepFocus", api);
