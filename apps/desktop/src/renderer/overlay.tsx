@@ -16,10 +16,25 @@ function App() {
   const draggingRef = useRef(false);
 
   useEffect(() => {
+    console.info("[overlay] App mounted, requesting start payload");
+    let cancelled = false;
     const off = window.deepFocus?.overlay?.onStart?.((payload) => {
-      setInfo(payload as OverlayInfo);
+      console.info("[overlay] received OVERLAY_START (push)", payload);
+      if (!cancelled) setInfo(payload as OverlayInfo);
     });
+    // Pull immediately in case the push fired before we subscribed. In dev,
+    // StrictMode double-mounts can drop the push between unmount + remount.
+    void (async () => {
+      const payload = await window.deepFocus?.overlay?.requestStart?.();
+      if (payload && !cancelled) {
+        console.info("[overlay] received OVERLAY_START (pull)", payload);
+        setInfo(payload as OverlayInfo);
+      } else if (!payload) {
+        console.warn("[overlay] requestStart returned null");
+      }
+    })();
     return () => {
+      cancelled = true;
       off?.();
     };
   }, []);
@@ -27,14 +42,26 @@ function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        console.info("[overlay] Escape pressed — cancelling");
         window.deepFocus?.overlay?.cancel?.();
       }
     };
+    // Also attach a window-level mouseup so we catch the release even if the
+    // user's drag ends on a non-root element or outside React's synthetic
+    // boundary.
+    const onWinMouseUp = (e: MouseEvent) => {
+      console.info("[overlay] window.mouseup", { x: e.clientX, y: e.clientY });
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("mouseup", onWinMouseUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mouseup", onWinMouseUp);
+    };
   }, []);
 
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    console.info("[overlay] mousedown", { x: e.clientX, y: e.clientY });
     draggingRef.current = true;
     const p = { x: e.clientX, y: e.clientY };
     setStart(p);
@@ -46,7 +73,7 @@ function App() {
   };
   const onMouseUp = () => {
     draggingRef.current = false;
-    console.info("[overlay] mouseup", { start, current, info });
+    console.info("[overlay] mouseup (react)", { start, current, info });
     if (!info) {
       // We never got OVERLAY_START — fall back to window-relative coords.
       // Each overlay window covers exactly one display, so passing raw coords

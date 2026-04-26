@@ -13,7 +13,7 @@ import {
 import path from "node:path";
 
 import { IPC, type WindowContext } from "../../shared/ipc";
-import { showPanel } from "../windows/panel";
+import { showPanel, getPanelWindow } from "../windows/panel";
 
 /**
  * Region capture on macOS requires Screen Recording permission. Without it,
@@ -24,6 +24,7 @@ import { showPanel } from "../windows/panel";
 function ensureScreenRecordingPermission(): boolean {
   if (process.platform !== "darwin") return true;
   const status = systemPreferences.getMediaAccessStatus("screen");
+  console.info(`[region] screen recording permission status="${status}"`);
   if (status === "granted") return true;
 
   // Show a modal dialog explaining what to do, with a button that opens the
@@ -62,8 +63,15 @@ type Pending = {
   windowContext: WindowContext | null | undefined;
 };
 
+type StartPayload = {
+  display: Electron.Rectangle;
+  captureSize: { width: number; height: number };
+};
+
 let pending: Pending | null = null;
 let ipcWired = false;
+// Keyed by webContents id so multi-display overlays each get the right display.
+const startPayloadByContents = new Map<number, StartPayload>();
 
 /**
  * Drops a dim, transparent BrowserWindow over every display so the user can
@@ -74,7 +82,11 @@ let ipcWired = false;
 export async function startRegionCapture(opts?: {
   windowContext?: WindowContext | null;
 }): Promise<void> {
-  if (pending) return; // already in flight
+  console.info("[region] startRegionCapture called");
+  if (pending) {
+    console.warn("[region] capture already in flight — ignoring");
+    return;
+  }
 
   if (!ensureScreenRecordingPermission()) {
     console.warn(
@@ -85,7 +97,19 @@ export async function startRegionCapture(opts?: {
 
   wireIpcOnce();
 
+  // If the main panel is on top, it can intercept mouse events over its area
+  // even though we dim the whole screen with the overlay. Hide it briefly for
+  // the duration of the region capture so the overlay is the only thing
+  // receiving clicks.
+  const panel = getPanelWindow();
+  const panelWasVisible = !!(panel && panel.isVisible());
+  if (panelWasVisible) {
+    console.info("[region] hiding panel during capture");
+    panel!.hide();
+  }
+
   const displays = screen.getAllDisplays();
+  console.info(`[region] opening overlay across ${displays.length} display(s)`);
   const windows: BrowserWindow[] = [];
 
   await Promise.all(
@@ -118,6 +142,14 @@ export async function startRegionCapture(opts?: {
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       win.setIgnoreMouseEvents(false);
 
+      // Forward the overlay's console.info/warn/error messages to the main
+      // terminal so we can see what the drag UI is doing without opening the
+      // renderer DevTools (which would steal focus from the overlay).
+      win.webContents.on("console-message", (_event, level, message) => {
+        const tag = level === 2 ? "warn" : level === 3 ? "error" : "info";
+        console.info(`[overlay-console:${tag}] ${message}`);
+      });
+
       if (DEV_URL) {
         const sep = DEV_URL.endsWith("/") ? "" : "/";
         await win.loadURL(`${DEV_URL}${sep}overlay.html`);
@@ -126,12 +158,30 @@ export async function startRegionCapture(opts?: {
           path.resolve(__dirname, "../../dist/renderer/overlay.html"),
         );
       }
-      win.once("ready-to-show", () => win.show());
+      // Cache the start payload so the renderer can pull it on mount — this
+      // is race-free vs. pushing on `did-finish-load`, which can arrive before
+      // React registers its listener (especially in dev under StrictMode).
+      const startPayload: StartPayload = {
+        display: bounds,
+        captureSize: { width: bounds.width, height: bounds.height },
+      };
+      // Capture the id eagerly: by the time `closed` fires `win.webContents`
+      // has been destroyed and touching any property on it throws
+      // "Object has been destroyed".
+      const contentsId = win.webContents.id;
+      startPayloadByContents.set(contentsId, startPayload);
+      win.on("closed", () => {
+        startPayloadByContents.delete(contentsId);
+      });
+
+      win.once("ready-to-show", () => {
+        console.info("[region] overlay ready-to-show — calling win.show()");
+        win.show();
+        win.focus();
+      });
       win.webContents.once("did-finish-load", () => {
-        win.webContents.send(IPC.OVERLAY_START, {
-          display: bounds,
-          captureSize: { width: bounds.width, height: bounds.height },
-        });
+        console.info("[region] overlay did-finish-load — sending OVERLAY_START");
+        win.webContents.send(IPC.OVERLAY_START, startPayload);
       });
       windows.push(win);
     }),
@@ -149,6 +199,20 @@ export async function startRegionCapture(opts?: {
 function wireIpcOnce() {
   if (ipcWired) return;
   ipcWired = true;
+
+  ipcMain.handle(IPC.OVERLAY_REQUEST_START, (event) => {
+    const payload = startPayloadByContents.get(event.sender.id);
+    if (payload) {
+      console.info(
+        `[region] overlay pulled start payload (contentsId=${event.sender.id})`,
+      );
+      return payload;
+    }
+    console.warn(
+      `[region] overlay requested start payload but none cached (contentsId=${event.sender.id})`,
+    );
+    return null;
+  });
 
   ipcMain.on(IPC.OVERLAY_COMPLETE, async (_event, payload: Rectangle) => {
     console.info(

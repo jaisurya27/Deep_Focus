@@ -19,11 +19,13 @@ export function registerHotkeys() {
   failures.splice(0);
 
   const { hotkeys } = getSettings();
+  console.info("[hotkeys] registering with accelerators:", hotkeys);
 
   // Smart "just ask / explain selection" — one hotkey, context-aware.
   // If text is selected in the foreground app, opens in selection mode;
   // otherwise falls back to the plain empty panel.
   register(hotkeys.justAsk, async () => {
+    console.info("[hotkeys] justAsk handler entered");
     const anchor = screen.getCursorScreenPoint();
 
     // If accessibility permission is absent on macOS, isTrustedAccessibilityClient
@@ -40,14 +42,17 @@ export function registerHotkeys() {
       return;
     }
 
-    // If the panel window has keyboard focus, the synthesized Cmd+C would
-    // target our own panel (which has no useful selection). Hide the panel
-    // first so focus falls back to whatever app was behind it, wait a tick,
-    // then fetch the selection from that app.
+    // Always hide the panel before the copy-hop. Even an unfocused
+    // always-on-top window can interfere with macOS's keystroke routing,
+    // and the panel is visible most of the time after the first hotkey press.
+    // We show it back again below (with the selection attached).
     const panel = getPanelWindow();
-    if (panel && panel.isVisible() && panel.isFocused()) {
-      panel.hide();
-      await new Promise((r) => setTimeout(r, 120));
+    const wasVisible = !!(panel && panel.isVisible());
+    if (wasVisible) {
+      panel!.hide();
+      // 200 ms gives macOS time to shift the key-window back to whichever app
+      // was behind us. 120 ms was sometimes too short for Chrome.
+      await new Promise((r) => setTimeout(r, 200));
     }
 
     const [selection, windowContext] = await Promise.all([
@@ -75,6 +80,7 @@ export function registerHotkeys() {
   });
 
   register(hotkeys.togglePanel, () => {
+    console.info("[hotkeys] togglePanel handler entered");
     const panel = getPanelWindow();
     if (!panel) {
       showPanel({ mode: "just-ask" });
@@ -85,9 +91,14 @@ export function registerHotkeys() {
   });
 
   register(hotkeys.regionCapture, async () => {
+    console.info("[hotkeys] regionCapture handler entered");
     const windowContext = await getActiveWindowContext().catch(() => null);
     await startRegionCapture({ windowContext });
   });
+
+  console.info(
+    `[hotkeys] done — registered=[${registered.join(", ")}] failed=[${failures.join(", ")}]`,
+  );
 }
 
 function register(accel: string, handler: () => void | Promise<void>) {

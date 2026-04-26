@@ -1,8 +1,9 @@
 import { app, clipboard, systemPreferences } from "electron";
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Bundle IDs / process names that are "us" — when any of these is the frontmost
@@ -95,9 +96,6 @@ async function doFetchSelectedText(): Promise<string | null> {
     return null;
   }
 
-  // Never snapshot a stale sentinel as the "original" clipboard — otherwise a
-  // future call would restore a sentinel, and polling loops could mistake one
-  // for a real selection.
   const rawOriginal = safeRead(() => clipboard.readText());
   const originalText =
     rawOriginal && SENTINEL_PATTERN.test(rawOriginal) ? "" : rawOriginal;
@@ -111,7 +109,7 @@ async function doFetchSelectedText(): Promise<string | null> {
   }
 
   try {
-    await triggerCopy();
+    await triggerCopy(frontmost);
   } catch (err) {
     console.warn("[selection] OS copy trigger failed:", err);
     restoreClipboard(originalText, originalImage);
@@ -140,13 +138,25 @@ async function doFetchSelectedText(): Promise<string | null> {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-async function triggerCopy(): Promise<void> {
+async function triggerCopy(targetAppName: string | null): Promise<void> {
   switch (process.platform) {
     case "darwin": {
-      await execAsync(
-        `osascript -e 'tell application "System Events" to keystroke "c" using command down'`,
-        { timeout: 2000 },
-      );
+      // Escape any quotes in the app name; AppleScript will otherwise choke on
+      // names like "Safari Technology Preview" with weird punctuation.
+      const safeName = (targetAppName ?? "").replace(/"/g, '\\"');
+      // Explicitly activate the target app so our synthesized Cmd+C lands in
+      // the right focused element. Without this, Chrome/Safari sometimes
+      // receive the keystroke but the focused element has no selection
+      // (e.g. the URL bar, or the dev-tools pane).
+      const script = safeName
+        ? [
+            `tell application "${safeName}" to activate`,
+            `delay 0.08`,
+            `tell application "System Events" to keystroke "c" using command down`,
+          ]
+        : [`tell application "System Events" to keystroke "c" using command down`];
+      const args = script.flatMap((line) => ["-e", line]);
+      await execFileAsync("osascript", args, { timeout: 2500 });
       return;
     }
     case "win32": {

@@ -17,6 +17,7 @@ export const IPC = {
   SETTINGS_GET: "settings:get",
   SETTINGS_SET: "settings:set",
   BACKEND_URL_GET: "backend:url:get",
+  OVERLAY_REQUEST_START: "overlay:request-start",
   OVERLAY_COMPLETE: "overlay:complete",
   OVERLAY_CANCEL: "overlay:cancel",
   HISTORY_OPEN: "history:open",
