@@ -24,7 +24,7 @@ function buildInlineTrayIcon(): NativeImage {
 export function createTray() {
   if (tray) return tray;
   tray = new Tray(buildInlineTrayIcon());
-  tray.setToolTip("Deep Focus — Cmd+Ctrl+J to ask");
+  tray.setToolTip("Glance — Cmd+Ctrl+J to ask");
   // Visible text label next to the (empty) icon — makes the tray
   // impossible to miss on a crowded menu bar.
   if (process.platform === "darwin") {
@@ -62,10 +62,10 @@ export function createTray() {
         },
         { type: "separator" },
         {
-          label: "About Deep Focus",
-          click: () => app.setAboutPanelOptions({ applicationName: "Deep Focus" }),
+          label: "About Glance",
+          click: () => app.setAboutPanelOptions({ applicationName: "Glance" }),
         },
-        { role: "quit", label: "Quit Deep Focus" },
+        { role: "quit", label: "Quit Glance" },
       ]),
     );
   };

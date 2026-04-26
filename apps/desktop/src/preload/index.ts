@@ -22,6 +22,9 @@ const api = {
     hide() {
       ipcRenderer.send(IPC.PANEL_HIDE);
     },
+    setClickThrough(passthrough: boolean) {
+      ipcRenderer.send(IPC.PANEL_CLICK_THROUGH, passthrough);
+    },
   },
   overlay: {
     onStart(listener: (payload: { display: Electron.Rectangle; captureSize: { width: number; height: number } }) => void) {

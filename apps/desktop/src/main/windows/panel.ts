@@ -13,8 +13,8 @@ const PRELOAD_PATH = path.resolve(__dirname, "../preload/index.js");
 // the built HTML from dist/renderer.
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
 
-const PANEL_WIDTH = 480;
-const PANEL_MARGIN = 16;
+const PANEL_WIDTH = 560;
+const PANEL_MARGIN = 20;
 
 let panel: BrowserWindow | null = null;
 
@@ -26,22 +26,26 @@ export async function createPanelWindow(): Promise<BrowserWindow> {
   if (panel && !panel.isDestroyed()) return panel;
 
   const { workArea } = screen.getPrimaryDisplay();
-  const maxHeight = Math.min(720, Math.floor(workArea.height * 0.85));
+  const maxHeight = Math.min(820, Math.floor(workArea.height * 0.92));
 
   panel = new BrowserWindow({
     width: PANEL_WIDTH,
     height: maxHeight,
     minWidth: 360,
-    minHeight: 240,
+    minHeight: 160,
     show: false,
     frame: false,
     transparent: true,
+    hasShadow: false,
     resizable: true,
     movable: true,
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
-    vibrancy: process.platform === "darwin" ? "under-window" : undefined,
+    // No window-level vibrancy: it paints a frosted rectangle across the
+    // entire BrowserWindow regardless of renderer content, which ghosts
+    // through as a big empty box. The glass cards in the renderer carry
+    // their own backdrop-filter so the frosted look lives per-element.
     backgroundColor: "#00000000",
     webPreferences: {
       preload: PRELOAD_PATH,
@@ -69,6 +73,11 @@ export async function createPanelWindow(): Promise<BrowserWindow> {
     panel = null;
   });
 
+  // Start in click-through mode so the window's transparent pixels don't
+  // swallow clicks meant for apps beneath. The renderer toggles this off
+  // whenever the cursor is over Glance UI (see `setClickThrough` IPC).
+  panel.setIgnoreMouseEvents(true, { forward: true });
+
   panel.on("blur", () => {
     // Intentionally leave the panel visible on blur — users want it to stay
     // while they read the source doc. Esc or click-outside-to-dismiss is
@@ -86,15 +95,14 @@ function anchorPanelToCursor(win: BrowserWindow, anchor?: { x: number; y: number
   let x: number;
   let y: number;
 
-  if (anchor) {
-    // Anchor near the selection if provided.
-    x = Math.min(point.x + PANEL_MARGIN, display.workArea.x + display.workArea.width - w - PANEL_MARGIN);
-    y = Math.min(point.y + PANEL_MARGIN, display.workArea.y + display.workArea.height - h - PANEL_MARGIN);
-  } else {
-    // Otherwise dock to the right edge of the active display.
-    x = display.workArea.x + display.workArea.width - w - PANEL_MARGIN;
-    y = display.workArea.y + PANEL_MARGIN;
-  }
+  // Glance docks to the BOTTOM-right of the active display. The window is
+  // transparent and its content floats from the bottom up, so unused pixels
+  // read as invisible.
+  x = display.workArea.x + display.workArea.width - w - PANEL_MARGIN;
+  y = display.workArea.y + display.workArea.height - h - PANEL_MARGIN;
+  // `anchor` is kept in the signature for future "follow the cursor" UX but
+  // intentionally ignored here to keep the orb in a stable resting spot.
+  void anchor;
 
   win.setPosition(Math.round(x), Math.round(y));
 }

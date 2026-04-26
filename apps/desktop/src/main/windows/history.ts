@@ -17,7 +17,7 @@ export async function openHistoryWindow(): Promise<BrowserWindow> {
     height: 560,
     minWidth: 520,
     minHeight: 360,
-    title: "Deep Focus — History",
+    title: "Glance — History",
     backgroundColor: "#020617",
     show: false,
     webPreferences: {

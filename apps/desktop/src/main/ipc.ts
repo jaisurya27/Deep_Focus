@@ -6,12 +6,22 @@ import { getSettings, setSettings, getSecret, setSecret } from "./settings";
 import { registerHotkeys } from "./hotkeys";
 import { openHistoryWindow } from "./windows/history";
 import { openSettingsWindow } from "./windows/settings";
-import { hidePanel } from "./windows/panel";
+import { getPanelWindow, hidePanel } from "./windows/panel";
 import { clearAllSessionsRemote } from "./history";
 
 export function registerIpc() {
   ipcMain.on(IPC.PANEL_HIDE, () => {
     hidePanel();
+  });
+
+  ipcMain.on(IPC.PANEL_CLICK_THROUGH, (_e, passthrough: boolean) => {
+    const win = getPanelWindow();
+    if (!win || win.isDestroyed()) return;
+    if (passthrough) {
+      win.setIgnoreMouseEvents(true, { forward: true });
+    } else {
+      win.setIgnoreMouseEvents(false);
+    }
   });
 
   ipcMain.handle(IPC.SETTINGS_GET, () => getSettings());

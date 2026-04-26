@@ -26,6 +26,7 @@ export const IPC = {
   SETTINGS_GET_API_KEY_STATE: "settings:get-api-key-state",
   SETTINGS_CLEAR_HISTORY: "settings:clear-history",
   WINDOW_CONTEXT_GET: "window-context:get",
+  PANEL_CLICK_THROUGH: "panel:click-through",
 } as const;
 
 export type PanelMode = "just-ask" | "selection" | "region";
