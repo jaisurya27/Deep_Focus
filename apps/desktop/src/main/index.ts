@@ -20,7 +20,7 @@ if (!gotLock) {
 app.on("second-instance", () => {
   const panel = getPanelWindow();
   if (panel) {
-    showPanel({ mode: "just-ask" });
+    showPanel({ mode: "just-ask", explicit: true });
   }
 });
 
@@ -35,11 +35,13 @@ app.whenReady().then(async () => {
     // intentional no-op: tray keeps us alive
   });
 
-  // First-launch: surface the panel in onboarding mode so users see what the
-  // hotkeys do without hunting through menus.
+  // Always show the idle orb on startup so users have a visible entry point.
+  // The renderer starts in the collapsed "orb" state by default, so this just
+  // positions the transparent window in the bottom-right and makes it visible.
+  showPanel({ mode: "just-ask" });
+
   const settings = getSettings();
   if (!settings.onboardingComplete) {
-    showPanel({ mode: "just-ask" });
     setSettings({ onboardingComplete: true });
   }
 });

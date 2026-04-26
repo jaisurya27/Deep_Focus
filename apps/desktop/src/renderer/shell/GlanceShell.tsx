@@ -9,6 +9,7 @@ import {
 
 import type { ActionSummary } from "../../shared/artifacts";
 import { CATEGORY_LABELS, CATEGORY_ORDER } from "../../shared/artifacts";
+import type { PanelOpenPayload } from "../../shared/ipc";
 import {
   checkHealth,
   listActions,
@@ -48,6 +49,9 @@ export function GlanceShell() {
   const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState("");
   const [healthWarning, setHealthWarning] = useState<string | null>(null);
+  const [panelNotice, setPanelNotice] = useState<
+    NonNullable<PanelOpenPayload["notice"]> | null
+  >(null);
   const [artifactProgress, setArtifactProgress] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -64,8 +68,10 @@ export function GlanceShell() {
 
   // Auto-expand when context arrives or a turn is in flight.
   useEffect(() => {
-    if (hasContext || isStreaming || lastArtifactMsg) setExpanded(true);
-  }, [hasContext, isStreaming, lastArtifactMsg]);
+    if (hasContext || isStreaming || lastArtifactMsg || panelNotice) {
+      setExpanded(true);
+    }
+  }, [hasContext, isStreaming, lastArtifactMsg, panelNotice]);
 
   // --- Wire up panel open / health -----------------------------------
 
@@ -75,13 +81,18 @@ export function GlanceShell() {
       store.setMode(payload.mode);
       store.setWindowContext(payload.windowContext ?? null);
 
+      let shouldExpand = false;
+      if (payload.notice) {
+        setPanelNotice(payload.notice);
+        shouldExpand = true;
+      }
       if (payload.mode === "selection") {
-        store.setPendingSelection(
-          payload.selectionText
-            ? { text: payload.selectionText, sourceApp: payload.sourceApp ?? null }
-            : null,
-        );
+        const sel = payload.selectionText
+          ? { text: payload.selectionText, sourceApp: payload.sourceApp ?? null }
+          : null;
+        store.setPendingSelection(sel);
         store.setPendingImage(null);
+        shouldExpand = !!sel;
       } else if (payload.mode === "region") {
         if (payload.imageDataUrl) {
           store.setPendingImage({
@@ -90,11 +101,18 @@ export function GlanceShell() {
             height: payload.height,
             savedPath: payload.imagePath ?? null,
           });
+          shouldExpand = true;
         }
         store.setPendingSelection(null);
+      } else if (payload.mode === "just-ask") {
+        // Hotkey/tray/"ask a question" — open the composer immediately.
+        // Startup nudge (no explicit intent) leaves us collapsed as an orb.
+        shouldExpand = !!payload.explicit;
       }
-      setExpanded(true);
-      requestAnimationFrame(() => inputRef.current?.focus());
+      if (shouldExpand) {
+        setExpanded(true);
+        requestAnimationFrame(() => inputRef.current?.focus());
+      }
     });
     return () => {
       off?.();
@@ -147,6 +165,7 @@ export function GlanceShell() {
   const collapseShell = useCallback(() => {
     setExpanded(false);
     setDraft("");
+    setPanelNotice(null);
     const store = useSession.getState();
     store.setPendingSelection(null);
     store.setPendingImage(null);
@@ -335,12 +354,10 @@ export function GlanceShell() {
   // ------------------------------------------------------------------
 
   // Collapsed: just the orb.
-  if (!expanded && !isStreaming && !lastArtifactMsg) {
+  if (!expanded && !isStreaming && !lastArtifactMsg && !panelNotice) {
     return (
       <Stage>
-        <button
-          aria-label="Open Glance"
-          className="orb pop-in"
+        <DraggableOrb
           onClick={() => {
             setExpanded(true);
             requestAnimationFrame(() => inputRef.current?.focus());
@@ -353,11 +370,20 @@ export function GlanceShell() {
   // Expanded states — context chip + artifact (if any) + composer (if no artifact).
   return (
     <Stage>
-      <div className="flex w-full max-w-[520px] flex-col items-end gap-2.5">
+      <div className="flex w-[520px] flex-col items-end gap-2.5">
+        <DragGrip />
+
         {healthWarning ? (
           <div className="slide-down rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-200">
             {healthWarning}
           </div>
+        ) : null}
+
+        {panelNotice ? (
+          <NoticeBanner
+            notice={panelNotice}
+            onDismiss={() => setPanelNotice(null)}
+          />
         ) : null}
 
         {hasContext && !lastArtifactMsg ? (
@@ -367,6 +393,18 @@ export function GlanceShell() {
             onClear={() => {
               useSession.getState().setPendingSelection(null);
               useSession.getState().setPendingImage(null);
+            }}
+          />
+        ) : null}
+
+        {hasContext && !lastArtifactMsg && !isStreaming ? (
+          <SmartCrumbs
+            selection={pendingSelection}
+            image={pendingImage}
+            disabled={isStreaming}
+            onPick={(prompt) => {
+              setDraft(prompt);
+              void sendText(prompt);
             }}
           />
         ) : null}
@@ -433,19 +471,125 @@ export function GlanceShell() {
 // Stage: anchors everything to the bottom-right of the transparent window.
 // ---------------------------------------------------------------------
 
+// Stage sizes the Electron window to exactly match its content plus a wide
+// transparent halo on every side. The halo is where box-shadows, orb glows,
+// and artifact drop shadows fade out smoothly. Without it, shadows hit the
+// window edge and render a sharp rectangular cutoff. The extra transparent
+// area is invisible and doesn't swallow clicks on the app beneath because
+// pointer-events is `none` on the Stage itself — only real UI children
+// (orb / composer / grip / artifact) opt into pointer-events via `auto`.
+const HALO_MARGIN = 72;
+
 function Stage({ children }: { children: React.ReactNode }) {
-  const setPassthrough = (on: boolean) =>
-    window.deepFocus?.panel?.setClickThrough?.(on);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const push = () => {
+      const rect = el.getBoundingClientRect();
+      const w = Math.ceil(rect.width) + HALO_MARGIN * 2;
+      const h = Math.ceil(rect.height) + HALO_MARGIN * 2;
+      window.deepFocus?.panel?.setContentSize?.(w, h);
+    };
+    push();
+    const ro = new ResizeObserver(push);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <div className="pointer-events-none fixed inset-0 flex items-end justify-end p-4">
-      <div
-        className="pointer-events-auto flex max-h-full flex-col items-end justify-end"
-        onMouseEnter={() => setPassthrough(false)}
-        onMouseLeave={() => setPassthrough(true)}
-      >
-        {children}
+    <div
+      ref={ref}
+      className="pointer-events-none inline-flex flex-col items-end gap-2.5 [&>*]:pointer-events-auto"
+      style={{ margin: HALO_MARGIN, width: "fit-content" }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Drag grip — small handle users can grab to move the whole window.
+// ---------------------------------------------------------------------
+
+function DragGrip() {
+  const handlers = useWindowDragHandlers();
+  return (
+    <div
+      title="Drag to move Glance"
+      className="slide-down glass flex h-5 w-14 cursor-grab items-center justify-center rounded-full active:cursor-grabbing"
+      {...handlers}
+    >
+      <div className="flex gap-0.5">
+        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
+        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
+        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
+        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// DraggableOrb — click to open, press-and-drag to move the window.
+// We implement drag manually (not via -webkit-app-region) because the
+// native drag region swallows click events and :hover styles on Electron.
+// ---------------------------------------------------------------------
+
+const DRAG_THRESHOLD_PX = 4;
+
+function useWindowDragHandlers(onClick?: () => void) {
+  const stateRef = useRef<{
+    startX: number;
+    startY: number;
+    moved: boolean;
+  } | null>(null);
+
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    stateRef.current = { startX: e.screenX, startY: e.screenY, moved: false };
+    window.deepFocus?.panel?.dragStart?.(e.screenX, e.screenY);
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  }, []);
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    const s = stateRef.current;
+    if (!s) return;
+    const dx = e.screenX - s.startX;
+    const dy = e.screenY - s.startY;
+    if (!s.moved && dx * dx + dy * dy < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+      return;
+    }
+    s.moved = true;
+    window.deepFocus?.panel?.dragMove?.(e.screenX, e.screenY);
+  }, []);
+
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      const s = stateRef.current;
+      stateRef.current = null;
+      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+      if (s && !s.moved) {
+        onClick?.();
+      }
+    },
+    [onClick],
+  );
+
+  return { onPointerDown, onPointerMove, onPointerUp };
+}
+
+function DraggableOrb({ onClick }: { onClick: () => void }) {
+  const handlers = useWindowDragHandlers(onClick);
+  return (
+    <button
+      aria-label="Open Glance (drag to reposition)"
+      title="Click to open · drag to move"
+      className="orb pop-in"
+      {...handlers}
+    />
   );
 }
 
@@ -496,6 +640,168 @@ function ContextChip({
       </button>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------
+// Notice banner — main-process warnings/errors surfaced in the shell
+// (e.g. Screen Recording permission missing). Dismissable, with an
+// optional deep-link button.
+// ---------------------------------------------------------------------
+
+function NoticeBanner({
+  notice,
+  onDismiss,
+}: {
+  notice: NonNullable<PanelOpenPayload["notice"]>;
+  onDismiss: () => void;
+}) {
+  const tone = notice.tone ?? "warn";
+  const palette =
+    tone === "error"
+      ? "border-rose-500/40 bg-rose-500/10 text-rose-100"
+      : tone === "info"
+        ? "border-sky-500/40 bg-sky-500/10 text-sky-100"
+        : "border-amber-500/40 bg-amber-500/10 text-amber-100";
+  return (
+    <div
+      className={
+        "slide-down flex max-w-[480px] items-start gap-2 rounded-2xl border px-3 py-2 text-[12px] " +
+        palette
+      }
+    >
+      <div className="min-w-0 flex-1">
+        <div className="font-medium leading-tight">{notice.title}</div>
+        {notice.body ? (
+          <div className="mt-1 text-[11px] leading-snug text-slate-200/80">
+            {notice.body}
+          </div>
+        ) : null}
+        {notice.action ? (
+          <button
+            onClick={() =>
+              window.deepFocus?.shell?.openExternal?.(notice.action!.href)
+            }
+            className="mt-2 rounded-full border border-white/20 bg-white/5 px-2.5 py-[3px] text-[11px] font-medium text-slate-100 transition hover:bg-white/10"
+          >
+            {notice.action.label}
+          </button>
+        ) : null}
+      </div>
+      <button
+        aria-label="Dismiss"
+        onClick={onDismiss}
+        className="shrink-0 rounded-full p-1 text-slate-300/80 transition hover:bg-white/10 hover:text-white"
+      >
+        <CloseIcon />
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Smart crumbs — context-aware one-tap prompts. Heuristics over the
+// attached selection/image/sourceApp produce 3–4 short suggestions that
+// auto-send when tapped, so the user never sees a "plain empty" panel.
+// ---------------------------------------------------------------------
+
+function SmartCrumbs({
+  selection,
+  image,
+  disabled,
+  onPick,
+}: {
+  selection: AttachedSelection | null;
+  image: AttachedImage | null;
+  disabled: boolean;
+  onPick: (prompt: string) => void;
+}) {
+  const crumbs = useMemo(
+    () => buildSmartCrumbs({ selection, image }),
+    [selection, image],
+  );
+  if (!crumbs.length) return null;
+
+  return (
+    <div className="slide-down flex max-w-[480px] flex-wrap justify-end gap-1.5">
+      {crumbs.map((c) => (
+        <button
+          key={c.label}
+          disabled={disabled}
+          onClick={() => onPick(c.prompt)}
+          title={c.prompt}
+          className="rounded-full border border-emerald-500/25 bg-emerald-500/5 px-3 py-[5px] text-[11.5px] text-emerald-100/90 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 hover:text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {c.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+type Crumb = { label: string; prompt: string };
+
+function buildSmartCrumbs({
+  selection,
+  image,
+}: {
+  selection: AttachedSelection | null;
+  image: AttachedImage | null;
+}): Crumb[] {
+  const out: Crumb[] = [];
+  const text = selection?.text?.trim() ?? "";
+  const app = (selection?.sourceApp ?? "").toLowerCase();
+
+  if (text) {
+    const codeyApp = /code|xcode|terminal|iterm|intellij|pycharm|webstorm|vim|nvim|sublime/.test(
+      app,
+    );
+    const codeyText =
+      /[{};]|=>|function\s|def\s|class\s|import\s|#include|console\.|error:|traceback/i.test(
+        text,
+      );
+    const urly = /\bhttps?:\/\//i.test(text);
+    const looksLikeError = /\b(error|exception|traceback|failed|undefined|null)\b/i.test(
+      text,
+    );
+    const longish = text.length > 260;
+    const nonEnglish = /[\u00C0-\u024F\u0400-\u04FF\u3040-\u30FF\u4E00-\u9FFF\u0600-\u06FF]/.test(
+      text,
+    );
+
+    if (codeyApp || codeyText) {
+      out.push({ label: "Explain this code", prompt: "Explain what this code does, step by step." });
+      if (looksLikeError) {
+        out.push({ label: "Diagnose error", prompt: "What is causing this error and how do I fix it?" });
+      } else {
+        out.push({ label: "Find bugs", prompt: "Review this for bugs, edge cases, and smells." });
+      }
+      out.push({ label: "Improve", prompt: "Suggest a cleaner, more idiomatic version." });
+    } else {
+      out.push({ label: "Explain", prompt: "Explain this clearly and concisely." });
+      if (longish) {
+        out.push({ label: "TL;DR", prompt: "Give me a 2–3 sentence TL;DR." });
+      } else {
+        out.push({ label: "What does this mean?", prompt: "What does this mean in context?" });
+      }
+      if (nonEnglish) {
+        out.push({ label: "Translate → English", prompt: "Translate this to English." });
+      } else {
+        out.push({ label: "Simplify", prompt: "Rewrite this in plain language a 10-year-old could grasp." });
+      }
+      if (urly) {
+        out.push({ label: "Summarize link", prompt: "Summarize what this link is likely about." });
+      }
+    }
+    out.push({ label: "Ask something else…", prompt: "" });
+  } else if (image?.dataUrl) {
+    out.push({ label: "Describe what's here", prompt: "Describe everything visible in this region, concisely." });
+    out.push({ label: "Extract text", prompt: "Extract all legible text verbatim." });
+    out.push({ label: "Explain", prompt: "Explain what this is and why it matters." });
+    out.push({ label: "What should I do?", prompt: "Given this, what's the most useful next action I can take?" });
+  }
+
+  // Keep it tight — at most 4 chips fit cleanly beside the 520px shell.
+  return out.filter((c) => c.prompt).slice(0, 4);
 }
 
 // ---------------------------------------------------------------------

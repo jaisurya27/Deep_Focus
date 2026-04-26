@@ -27,43 +27,42 @@ function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        window.deepFocus?.overlay?.cancel?.();
+        window.deepFocus?.overlay?.cancel?.("esc");
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    draggingRef.current = true;
-    const p = { x: e.clientX, y: e.clientY };
-    setStart(p);
-    setCurrent(p);
-  };
-  const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!draggingRef.current) return;
-    setCurrent({ x: e.clientX, y: e.clientY });
-  };
-  const onMouseUp = () => {
+  // We stash the live start/current in refs so the window-level pointerup
+  // handler (below) can read them without relying on stale closures — React
+  // mouse events stop firing as soon as the pointer leaves the root div, so
+  // we can't depend on onMouseUp alone to close the drag.
+  const startRef = useRef<Point | null>(null);
+  const currentRef = useRef<Point | null>(null);
+
+  const finishDrag = (trigger: string) => {
+    if (!draggingRef.current) {
+      console.info(`[overlay] finishDrag(${trigger}) — not dragging, ignoring`);
+      return;
+    }
     draggingRef.current = false;
-    console.info("[overlay] mouseup", { start, current, info });
+    const s = startRef.current;
+    const c = currentRef.current;
+    console.info("[overlay] finishDrag", { trigger, start: s, current: c, info });
     if (!info) {
-      // We never got OVERLAY_START — fall back to window-relative coords.
-      // Each overlay window covers exactly one display, so passing raw coords
-      // works even without the display origin (main process will map them).
-      console.warn("[overlay] no OverlayInfo — cancelling capture");
-      window.deepFocus?.overlay?.cancel?.();
+      window.deepFocus?.overlay?.cancel?.("no-overlay-info");
       return;
     }
-    if (!start || !current) {
-      console.warn("[overlay] no drag recorded — cancelling");
-      window.deepFocus?.overlay?.cancel?.();
+    if (!s || !c) {
+      window.deepFocus?.overlay?.cancel?.("no-points");
       return;
     }
-    const rect = normalize(start, current);
-    if (rect.width < 4 || rect.height < 4) {
-      console.info("[overlay] drag too small — cancelling");
-      window.deepFocus?.overlay?.cancel?.();
+    const rect = normalize(s, c);
+    if (rect.width < 2 || rect.height < 2) {
+      window.deepFocus?.overlay?.cancel?.(
+        `too-small(${Math.round(rect.width)}x${Math.round(rect.height)})`,
+      );
       return;
     }
     const screenRect: Rect = {
@@ -76,6 +75,46 @@ function App() {
     window.deepFocus?.overlay?.complete?.(screenRect);
   };
 
+  useEffect(() => {
+    const onUp = () => finishDrag("window-pointerup");
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [info]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    draggingRef.current = true;
+    const p = { x: e.clientX, y: e.clientY };
+    startRef.current = p;
+    currentRef.current = p;
+    setStart(p);
+    setCurrent(p);
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    console.info("[overlay] pointerdown", p);
+  };
+  const moveCountRef = useRef(0);
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingRef.current) return;
+    const p = { x: e.clientX, y: e.clientY };
+    currentRef.current = p;
+    setCurrent(p);
+    moveCountRef.current += 1;
+    if (moveCountRef.current === 1 || moveCountRef.current % 25 === 0) {
+      console.info(`[overlay] pointermove #${moveCountRef.current}`, p);
+    }
+  };
+  const onPointerUp = () => finishDrag("pointerup");
+  const onPointerCancel = () => {
+    if (!draggingRef.current) return;
+    console.warn("[overlay] pointercancel — drag was interrupted");
+    draggingRef.current = false;
+    window.deepFocus?.overlay?.cancel?.("pointer-cancel");
+  };
+
   const selectionRect = useMemo(() => {
     if (!start || !current) return null;
     return normalize(start, current);
@@ -83,9 +122,10 @@ function App() {
 
   return (
     <div
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
       style={{
         position: "fixed",
         inset: 0,

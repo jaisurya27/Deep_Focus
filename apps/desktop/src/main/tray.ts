@@ -39,7 +39,7 @@ export function createTray() {
       Menu.buildFromTemplate([
         {
           label: `Ask / Explain Selection  (${justAsk})`,
-          click: () => showPanel({ mode: "just-ask" }),
+          click: () => showPanel({ mode: "just-ask", explicit: true }),
         },
         {
           label: `Capture Region  (${regionCapture})`,
@@ -71,7 +71,7 @@ export function createTray() {
   };
 
   // Clicking the tray icon itself surfaces the panel in just-ask mode.
-  tray.on("click", () => showPanel({ mode: "just-ask" }));
+  tray.on("click", () => showPanel({ mode: "just-ask", explicit: true }));
   rebuildMenu();
   return tray;
 }
