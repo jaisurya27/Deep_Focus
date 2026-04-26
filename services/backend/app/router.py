@@ -71,23 +71,27 @@ def _router_system_prompt(catalog: list[dict]) -> str:
         "single best artifact action for the given context and user intent.\n\n"
         "Available actions:\n"
         f"{items}\n\n"
-        "Rules:\n"
-        "- If the captured content is clearly code, an error/trace, a chart, "
-        "  a UI screenshot, an equation, a recipe/dish photo, a product, a "
-        "  landmark, a to-do list, an email, or a diagram, pick the specialized "
-        "  action. Be decisive when the signal is strong.\n"
-        "- If the user is clearly asking about what's visible on their screen "
-        "  (e.g. 'what am I looking at', 'describe my screen', 'read this for me') "
-        "  AND no image is attached, pick `needs_context` so the client can "
-        "  capture a screenshot and retry.\n"
-        "- If nothing specialized fits, or the user is just having a "
-        "  conversation, pick `answer` and produce prose.\n"
-        "- `alternatives` should list up to 2 other plausible actions so the "
-        "  UI can offer 'try this instead' chips.\n"
-        "- If the user mentions food, a dish, eating, ordering delivery, or a "
-        "  restaurant, pick `food_order` or `restaurant_booking`.\n"
-        "- Respect the user's explicit instruction if present; never override "
-        "  a clear 'translate this' with something else.\n\n"
+        "Rules (in priority order):\n"
+        "1. USER INSTRUCTION WINS. If the user said 'explain', 'elaborate', "
+        "   'summarize', 'translate', 'rewrite', 'fix', 'solve', 'reply', etc., "
+        "   honour that intent and pick the matching action — even if an image "
+        "   is also present. Never let the image override a clear instruction.\n"
+        "   If the user says 'generate image', 'visualize', 'draw', 'illustrate', "
+        "   'show me what X looks like', or similar — pick `generate_image`.\n"
+        "2. SELECTED TEXT IS PRIMARY CONTEXT. When captured text is present "
+        "   alongside an image, the text is what the user highlighted — treat "
+        "   it as the main subject. The image is ambient background context.\n"
+        "3. If the user is clearly asking about what's visible on their screen "
+        "   (e.g. 'what am I looking at', 'describe my screen', 'read this for me') "
+        "   AND no image is attached, pick `needs_context` so the client can "
+        "   capture a screenshot and retry.\n"
+        "4. IMAGE-ONLY SPECIALISATION. Only pick a strong visual action "
+        "   (critique_ui, explain_chart, identify, recipe, diagram_to_mermaid) "
+        "   when there is NO captured text AND no conflicting instruction. "
+        "   Be decisive when the visual signal is strong and nothing else "
+        "   competes (code, error, chart, product photo, etc.).\n"
+        "5. FALLBACK. If nothing specialized fits, pick `answer`.\n"
+        "- `alternatives` should list up to 2 other plausible actions.\n\n"
         "Respond with a SINGLE JSON object, no prose, no fences, shape:\n"
         '{"action":"<id>","alternatives":[{"id":"<id>","reason":"…"}],"reason":"<1 sentence>"}'
     )
@@ -103,6 +107,23 @@ async def route_action(
     history: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Return `{action, alternatives, reason}` for the given context."""
+    # Hard pre-LLM overrides — user intent in the instruction beats captured
+    # content signals entirely. Check diagram intent BEFORE image-gen because
+    # some image-gen patterns (e.g. "draw a flowchart") overlap.
+    instr_lower = (user_instruction or "").lower().strip()
+    if instr_lower and _DIAGRAM_RE.search(instr_lower):
+        return {
+            "action": "diagram_to_mermaid",
+            "alternatives": [{"id": "generate_image", "reason": "AI-generated picture instead"}],
+            "reason": "User asked to visualize or diagram the content.",
+        }
+    if instr_lower and _IMAGE_GEN_RE.search(instr_lower):
+        return {
+            "action": "generate_image",
+            "alternatives": [{"id": "diagram_to_mermaid", "reason": "Structured diagram instead"}],
+            "reason": "User explicitly asked to generate an image.",
+        }
+
     catalog = _catalog_for_prompt(has_image=has_image)
     sys_prompt = _router_system_prompt(catalog)
 
@@ -254,6 +275,28 @@ _DEBATE_RE = re.compile(
 # screen right now" — user is clearly asking about visible content but we
 # don't have an image yet. The router emits `needs_context` so the client
 # auto-captures a screenshot and retries.
+_DIAGRAM_RE = re.compile(
+    r"\b("
+    r"visuali[sz]e|flowchart|flow\s+chart|diagram|mermaid|concept\s+map|"
+    r"mind\s+map|sequence\s+diagram|graph\s+(this|it|out)|map\s+(this|it|out)|"
+    r"show\s+(the\s+)?flow|draw\s+(a\s+)?(flowchart|diagram|graph|chart|map)"
+    r")\b",
+    re.I,
+)
+
+_IMAGE_GEN_RE = re.compile(
+    r"\b("
+    r"generate\s+(an?\s+)?image|create\s+(an?\s+)?image|make\s+(an?\s+)?image|"
+    r"draw\s+(me\s+(an?\s+)?|an?\s+|a\s+picture\s+of\s+)|"
+    r"show\s+me\s+(an?\s+)?(image|picture|illustration|photo|visual)|"
+    r"render\s+(an?\s+|this\s+as\s+(an?\s+)?)?image|"
+    r"paint\s+(me\s+|an?\s+)?|illustrate\s+(this|it|me)|"
+    r"what\s+(would|does)\s+.{1,40}\s+look\s+like|"
+    r"picture\s+(of|this)|image\s+(of|for\s+this)"
+    r")\b",
+    re.I,
+)
+
 _VISUAL_INTENT_RE = re.compile(
     r"\b("
     r"what\s+am\s+i\s+(looking|seeing|viewing)\s+at|"
@@ -302,6 +345,13 @@ def _heuristic_route(
             "Asking about the screen — need a screenshot to answer.",
         )
 
+    # Diagram/flowchart intent wins before image-gen (overlapping vocabulary).
+    if _DIAGRAM_RE.search(instr):
+        return pick("diagram_to_mermaid", ["generate_image"], "User wants a diagram or flowchart.")
+    # AI image generation intent.
+    if _IMAGE_GEN_RE.search(instr):
+        return pick("generate_image", ["diagram_to_mermaid"], "User wants to generate an image.")
+
     # Explicit user instruction wins.
     if _PRICE_MONITOR_RE.search(instr):
         return pick("price_monitor", ["price_comparison"], "Price monitoring intent.")
@@ -340,15 +390,18 @@ def _heuristic_route(
         if len(body) > 280:
             return pick("answer", ["rewrite", "translate"], "Long passage — summarize/prose.")
 
-    if has_image:
-        # When there's no text and no instruction, use the window context
-        # to make a smarter heuristic pick before the LLM router takes over.
-        # This only matters in mock mode or as a fast-path before the vision
-        # model responds; real providers will call the LLM router above.
+    # Image-only specialisation: only when there is no text body and no
+    # instruction. If there IS text (or "elaborate", etc.), fall through to answer.
+    if has_image and not body and not instr:
+        # Heuristic fast path (mock / before vision model): use window title+app
+        # to nudge food vs shopping vs code vs chart vs generic identify.
         app_lc = ((window_context or {}).get("appName") or "").lower()
         title_lc = ((window_context or {}).get("title") or "").lower()
         _FOOD_APPS = re.compile(r"doordash|ubereats|uber\s*eats|grubhub|yelp|opentable|zomato|instacart", re.I)
-        _FOOD_TITLE = re.compile(r"\b(recipe|restaurant|menu|food|eat|cook|dish|meal|dinner|lunch|breakfast|cafe|pizza|sushi|burger|ramen)\b", re.I)
+        _FOOD_TITLE = re.compile(
+            r"\b(recipe|restaurant|menu|food|eat|cook|dish|meal|dinner|lunch|breakfast|cafe|pizza|sushi|burger|ramen)\b",
+            re.I,
+        )
         _PRODUCT_APPS = re.compile(r"amazon|walmart|shopify|ebay|etsy|bestbuy|target", re.I)
         _CODE_APPS_RE = re.compile(r"code|xcode|terminal|iterm|intellij|pycharm|webstorm|vim|nvim|sublime", re.I)
         _CHART_TITLE = re.compile(r"\b(chart|graph|analytics|dashboard|stats|metrics|data)\b", re.I)
@@ -361,7 +414,6 @@ def _heuristic_route(
             return pick("explain_code", ["fix_code", "diagnose_error"], "Code editor detected.")
         if _CHART_TITLE.search(title_lc):
             return pick("explain_chart", ["answer"], "Chart/data context detected.")
-
         return pick("identify", ["critique_ui", "explain_chart"], "Image-only context.")
 
     return pick("answer", [], "Fallback — free-form answer.")

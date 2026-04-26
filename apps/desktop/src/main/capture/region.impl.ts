@@ -248,7 +248,12 @@ function wireIpcOnce() {
       console.warn("[region] no pending capture — ignoring OVERLAY_CANCEL");
       return;
     }
+    const panelWasHidden = !getPanelWindow()?.isVisible();
     closeOverlay(pending);
+    // Restore the panel that was hidden before the overlay was opened.
+    if (panelWasHidden) {
+      showPanel({ mode: "just-ask" });
+    }
   });
 }
 

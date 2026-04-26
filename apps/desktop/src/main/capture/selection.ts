@@ -90,8 +90,12 @@ async function doFetchSelectedText(): Promise<string | null> {
 
   const frontmost = await frontmostAppName();
   if (frontmost && OWN_APP_NAMES.has(frontmost)) {
+    // Our own panel is frontmost. This happens when the user clicked on the
+    // panel to read a previous result and then pressed the hotkey. We can't
+    // know which app had the selection, so fall back to the empty panel.
+    // (If they had just selected text in Chrome, Chrome would be frontmost.)
     console.info(
-      `[selection] frontmost app is "${frontmost}" (us) — skipping copy-hop.`,
+      `[selection] frontmost app is "${frontmost}" (us) — can't determine selection source.`,
     );
     return null;
   }
@@ -116,7 +120,9 @@ async function doFetchSelectedText(): Promise<string | null> {
     return null;
   }
 
-  const selection = await waitForClipboardChange(sentinel, 800);
+  // 1200ms: Chrome on a loaded page can take 900+ ms between activation and
+  // the clipboard settling, especially on a busy tab or after first invocation.
+  const selection = await waitForClipboardChange(sentinel, 1200);
   restoreClipboard(originalText, originalImage);
 
   if (selection === null) {
@@ -148,10 +154,13 @@ async function triggerCopy(targetAppName: string | null): Promise<void> {
       // the right focused element. Without this, Chrome/Safari sometimes
       // receive the keystroke but the focused element has no selection
       // (e.g. the URL bar, or the dev-tools pane).
+      // 0.15 s gives Chrome (multi-process) time to re-seat its focused
+      // element after activate. 0.08 was occasionally too short and caused
+      // "clipboard unchanged" failures even when text was selected.
       const script = safeName
         ? [
             `tell application "${safeName}" to activate`,
-            `delay 0.08`,
+            `delay 0.15`,
             `tell application "System Events" to keystroke "c" using command down`,
           ]
         : [`tell application "System Events" to keystroke "c" using command down`];

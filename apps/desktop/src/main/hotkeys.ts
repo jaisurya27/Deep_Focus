@@ -1,5 +1,6 @@
 import { globalShortcut, screen } from "electron";
 
+import { IPC } from "../shared/ipc";
 import { fetchSelectedText, hasAccessibilityPermission } from "./capture/selection";
 import { startRegionCapture } from "./capture/region";
 import { getActiveWindowContext } from "./context/active-window";
@@ -42,17 +43,20 @@ export function registerHotkeys() {
       return;
     }
 
-    // Always hide the panel before the copy-hop. Even an unfocused
-    // always-on-top window can interfere with macOS's keystroke routing,
-    // and the panel is visible most of the time after the first hotkey press.
-    // We show it back again below (with the selection attached).
+    // Brief stealth-hide: macOS won't release the "key window" to Chrome while
+    // our always-on-top Electron window holds focus (the composer focus() call
+    // from a prior open activates it). Without the hide, AppleScript's
+    // "tell Chrome to activate" + Cmd+C fights the existing key window and
+    // the clipboard doesn't change on subsequent presses.
+    //
+    // 120 ms: short enough to feel instant, long enough for macOS to hand
+    // the key window to Chrome after hide() (50 ms was flaky after the user
+    // had interacted with the Glance window).
     const panel = getPanelWindow();
     const wasVisible = !!(panel && panel.isVisible());
     if (wasVisible) {
       panel!.hide();
-      // 200 ms gives macOS time to shift the key-window back to whichever app
-      // was behind us. 120 ms was sometimes too short for Chrome.
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 120));
     }
 
     const [selection, windowContext] = await Promise.all([
@@ -84,11 +88,19 @@ export function registerHotkeys() {
     console.info("[hotkeys] togglePanel handler entered");
     const panel = getPanelWindow();
     if (!panel) {
-      showPanel({ mode: "just-ask", explicit: true });
+      showPanel({ mode: "just-ask" });
       return;
     }
-    if (panel.isVisible()) panel.hide();
-    else showPanel({ mode: "just-ask", explicit: true });
+    if (panel.isVisible()) {
+      // Tell the renderer to collapse to orb *before* hiding the window.
+      // This ensures the window comes back as the orb — not the expanded
+      // composer — when the user toggles it on again.
+      panel.webContents.send(IPC.PANEL_MINIMIZE);
+      panel.hide();
+    } else {
+      // Show without explicit so the renderer stays in orb mode.
+      showPanel({ mode: "just-ask" });
+    }
   });
 
   register(hotkeys.regionCapture, async () => {

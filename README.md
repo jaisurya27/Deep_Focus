@@ -1,38 +1,39 @@
 # Deep Focus
 
-> A menu-bar personal agent that clears your doubts about anything on your screen — browser tabs, PDFs, code, papers, anywhere. Hit a hotkey, point at what's confusing, get a streaming answer with follow-up chat.
+> A menu-bar **Glance**-style on-screen copilot: pick text, capture a region, or just ask. Model calls go through a local FastAPI sidecar (`127.0.0.1:8765`) to xAI, OpenAI, or mock. The *visible* product is **Glance**; the repo and IPC namespace still use the `deep-focus` / `deepFocus` names on purpose (see `CLAUDE.md`).
 
-Phases 1–4 are live, plus full-screen ambient vision on every message. Three hotkeys, three flows, follow-up chat, presets, region capture, session history, and a settings window. Everything runs locally against a FastAPI sidecar; model calls go from that sidecar to xAI Grok (primary) or OpenAI (fallback).
+## What works (high level)
+
+- **Glance shell** (`GlanceShell.tsx`) — floating orb, composer, and structured **artifacts** (not the legacy `AnswerPanel`: removed).
+- **One pipeline:** composer sends to **`POST /artifact`** with `action: "auto"`. The backend **router** picks the right artifact; **`needs_context`** can ask the client to attach a **screenshot** and retry (e.g. “what’s on my screen?”).
+- **Selected text** (`Cmd+Ctrl+J` by default) — copy-hop in the **foreground** app, selection shown in the UI, type a question or press **Enter** on an empty field for **"Explain this"** (no instant auto-send). Ambient full-screen is **not** sent when you already have selected text (avoids spurious “UI critique” style routes).
+- **Region capture** (`Cmd+Ctrl+S`) — overlay + crop; can auto-run the first turn for image-only context.
+- **Ambient screenshot** (when you ask **without** selection text) — silent capture with the panel hidden from the frame; needs **Screen Recording** on macOS.
+- **Session history, settings, tray, hotkey rebinding**, encrypted API keys, **in-memory** session store (14d purge on backend boot).
+- **Orb** starts **bottom-right of the main display** on first launch; position is **persisted** and clamped. Legacy saves near (0,0) are **healed** on startup.
 
 ## Repo layout
 
 ```
 Deep_Focus/
 ├─ apps/
-│  └─ desktop/                  Electron shell + React panel
-│     ├─ src/main/              Tray, hotkeys, IPC, windows
-│     │  ├─ capture/            Selected-text · region-capture · fullscreen ambient
-│     │  ├─ context/            Active-window introspection (no native deps)
-│     │  └─ windows/            panel / overlay / history / settings windows
-│     ├─ src/preload/           contextBridge between main and renderer
-│     ├─ src/renderer/          React + Tailwind — panel, overlay, history, settings
-│     └─ src/shared/            Types shared across processes
+│  └─ desktop/                  Electron + React
+│     ├─ src/main/              tray, hotkeys, IPC, windows, capture, context
+│     ├─ src/preload/           `window.deepFocus` bridge
+│     ├─ src/renderer/          `GlanceShell`, overlay, history, settings
+│     └─ src/shared/            IPC + types
 └─ services/
-   └─ backend/                  FastAPI on 127.0.0.1:8765
-      └─ app/
-         ├─ main.py             App + CORS + /health
-         ├─ routes/             /chat (SSE) · /chat/vision (SSE) · /image · /session
-         ├─ providers/          xAI Grok + OpenAI fallback + mock (chat/vision/image)
-         ├─ store/              In-memory session store (auto-purged after 14 days)
-         └─ presets.py          System-prompt templates (Simplify / Analogy / …)
+   └─ backend/                  FastAPI
+      ├─ app/routes/            `/artifact`, `/chat`, `/chat/vision`, `/image`, `/session`
+      ├─ app/router.py          `action: auto` routing (text vs image, `needs_context`, …)
+      └─ app/artifacts.py       catalog + JSON shapes for each artifact kind
 ```
 
 ## Prerequisites
 
-- **Node 20+**
-- **pnpm 10+** (`npm i -g pnpm` if you don't have it)
+- **Node 20+**, **pnpm 10+**
 - **Python 3.11+** and **uv** (`brew install uv` or <https://docs.astral.sh/uv/>)
-- macOS, Windows, or Linux
+- macOS, Windows, or Linux (some automation paths are OS-specific; see `docs/runbook.md`)
 
 ## Setup
 
@@ -41,11 +42,7 @@ pnpm install
 cd services/backend && uv sync && cd -
 
 cp services/backend/.env.example services/backend/.env
-# Paste your key(s) into services/backend/.env:
-#   XAI_API_KEY=xai-...
-#   OPENAI_API_KEY=sk-...     # optional fallback for chat / vision / images
-# With no keys set, the backend boots in mock mode — still fully usable
-# to demo the UX end-to-end (text, vision, and image generation).
+# Add keys: XAI_API_KEY, OPENAI_API_KEY, etc. No keys → mock mode still works for demos
 ```
 
 ## Run
@@ -54,96 +51,67 @@ cp services/backend/.env.example services/backend/.env
 pnpm dev
 ```
 
-One terminal, two services:
+- **Backend:** `http://127.0.0.1:8765`
+- **Desktop:** Electron with Vite HMI  
+  Menu-bar icon; on macOS the **dock** can be hidden on purpose. The **orb** appears in the **bottom-right** of the primary display (unless a saved position exists).
 
-- **backend** on `http://127.0.0.1:8765` (FastAPI + uv)
-- **desktop** Electron app with Vite HMR
-
-A green dot appears in your menu bar — no dock icon, by design. Hit a hotkey from anywhere.
-
-## Hotkeys
+## Hotkeys (defaults — rebind in Settings)
 
 | Keys | What happens |
 | --- | --- |
-| `Cmd+Ctrl+J` | **Ask / Explain selection** — if text is selected in the foreground app, attaches it as a quoted block and explains it; otherwise opens an empty panel. |
-| `Cmd+Ctrl+S` | **Capture region** — dim overlay over every display; drag a rectangle; the cropped image becomes the context for your next message. |
-| `Cmd+Ctrl+H` | Show / hide the panel. |
-| `Cmd/Ctrl+1 … 5` | Apply a preset to the last turn (Simplify · Analogy · Visual metaphor · Fun facts · Intuition). Auto-regenerates. |
-| `Cmd/Ctrl+R` | Regenerate last reply with the current preset. |
-| `Cmd/Ctrl+K` | Start a new thread. |
-| `Esc` | Hide the panel. |
+| `Cmd+Ctrl+J` | **Ask** — fetches **selection** in the foreground app if any; else opens the panel. Hides the panel briefly before copy for reliable macOS key-window behavior. |
+| `Cmd+Ctrl+S` | **Region** — full-screen transparent overlay, drag a rectangle, image attached. |
+| `Cmd+Ctrl+H` | **Show / hide** the panel. When hiding, the shell **minimizes to orb** so the next show isn’t stuck expanded. |
+| `Cmd+Ctrl+L` | **Toggle focus mode** (if wired in your build). |
+| `Esc` | From the panel: cancels stream or **minimizes** shell to the orb. |
+| `Cmd+K` (in panel) | **Hard reset** session in the client store (see `GlanceShell`). |
 
-Rebinding is available in **Settings → Shortcuts**.
+Older docs mentioned **Cmd+1…5** presets and **Cmd+R** “regenerate” — that was the **legacy** chat panel. The **Glance** shell uses **router-driven artifacts** and chips / follow-ups in the **artifact** UI instead. If you still need preset-style prompts, set them in the **composer** or extend artifacts on the backend.
 
-## What works today
+## Permissions (macOS)
 
-### Phase 1 — Just ask (baseline)
-- Global hotkey → floating panel, stays on top, doesn't steal focus.
-- Streaming answers via SSE. Follow-ups continue the same session.
-- Tray menu; no dock icon; health indicator inside the panel header.
+- **Accessibility** — required for the selection copy-hop (`System Settings → Privacy & Security → Accessibility` → your Electron/Deep Focus app).
+- **Screen Recording** — required for **region** capture, **ambient** screenshot, and **`needs_context`** full-screen snap.
 
-### Phase 2 — Selected text
-- Cross-platform selected-text fetch that saves, copies, reads, and restores the clipboard (macOS: `osascript`; Windows: PowerShell keystrokes; Linux: `xdotool` / `wtype`).
-- Selection renders as a collapsible quoted block above the first assistant reply.
-- Five preset chips below the composer: **Simplify · Analogy · Visual metaphor · Fun facts · Intuition**. Clicking a chip regenerates the last turn with that system-prompt template. `Cmd+1..5` from the keyboard.
+## What works (phased roll-up)
 
-### Phase 3 — Region capture + vision
-- `Cmd+Ctrl+S` opens a fullscreen transparent overlay on **every** display (Retina-aware, scaled correctly). Drag a rectangle to select.
-- The region is captured via `desktopCapturer` + `nativeImage.crop`, downscaled if large, and becomes the attached image for the next message.
-- Vision requests go to `POST /chat/vision` — `grok-2-vision-latest` by default, `gpt-4o` as automatic fallback.
-- The **Visual metaphor** preset switches to `POST /image` and streams the generated image inline (`gpt-image-1.5` → xAI Imagine fallback).
-- Cropped thumbnails appear in the panel header; click to expand.
+- **Phases 1–4 (baseline):** hotkeys, SSE streaming, tray, history, settings, **active-window** hints, **region** + **vision** path, in-memory store.
+- **Glance + artifacts:** `POST /artifact` JSON stream, `router.py` intent rules, new artifact UIs and types as they land on `main` / `dote` (maps, food, weather, `needs_context` cards, etc.). See `app/artifacts.py` and `docs/`.
 
-### Phase 4 — Polish, memory, history
-- In-memory session store that auto-purges anything older than 14 days on every backend boot.
-- **Ambient full-screen vision** — before every chat turn the app silently captures the display, fades the Deep Focus panel to invisible for ~50 ms (so it doesn't appear in the frame), and attaches the screenshot to the message. The model sees what you actually see — charts, code, PDFs, UI state — not just a window title. Falls back to text-only if Screen Recording permission is absent.
-- **Session history** window (tray → *Session history*): searchable list of past sessions with the source text preserved alongside the conversation.
-- **Settings** window (tray → *Settings*): rebind hotkeys, paste API keys (encrypted at rest via Electron `safeStorage`), toggle launch-on-startup, clear all history, check provider health.
-- First-launch welcome card with a quick hotkey tour.
-
-## One-off development commands
+## One-off dev commands
 
 ```bash
-# Backend only
 pnpm dev:backend
-
-# Desktop only (needs backend running)
 pnpm dev:desktop
-
-# Type-check the desktop app
 pnpm --filter @deep-focus/desktop typecheck
-
-# Smoke test text chat
-curl -N -X POST http://127.0.0.1:8765/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"what is a monad?"}],"preset":"analogy"}'
-
-# Smoke test vision
-curl -N -X POST http://127.0.0.1:8765/chat/vision \
-  -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"what is this?"}],"image_data_url":"data:image/png;base64,iVBORw0KGgo="}'
-
-# Smoke test image generation
-curl -X POST http://127.0.0.1:8765/image \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"a cozy cabin in winter"}'
 ```
 
-Force mock mode (no API keys needed) by exporting `CHAT_PROVIDER=mock`, `VISION_PROVIDER=mock`, `IMAGE_PROVIDER=mock` before starting the backend.
+**Smoke the backend**
 
-## Roadmap
+```bash
+curl -s http://127.0.0.1:8765/health | jq
+```
 
-- Phase 5 — Artifact rendering (Mermaid diagrams, flowcharts, live charts).
-- Phase 6 — Focus mode (optional webcam-based attention nudge).
-- Phase 7 — Browser extension for first-class page context.
-- Swap the in-memory store for SQLite so sessions survive backend restarts.
+**Smoke `/artifact`**
 
-## Notes / caveats
+```bash
+curl -s -N -X POST http://127.0.0.1:8765/artifact \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"auto","text":"Hello","user_instruction":null,"session_id":null}' 
+```
 
-- **`ELECTRON_RUN_AS_NODE`** — if you run `pnpm dev` from a Cursor/VS Code integrated terminal, Electron may inherit this env var and refuse to start a full GUI. The `pnpm dev:desktop` script clears it via `cross-env`; if you invoke Vite/Electron manually, either `unset ELECTRON_RUN_AS_NODE` first or use a plain system terminal.
-- **macOS permissions** — the first hotkey press triggers an **Accessibility** prompt (to synthesize the copy keystroke); `Cmd+Ctrl+S` triggers a **Screen Recording** prompt. Both are one-time. The full-screen ambient capture also needs Screen Recording; it silently falls back to text-only if not granted.
-- **API keys never leave the sidecar.** The renderer only speaks to `127.0.0.1:8765`. Keys live either in `services/backend/.env` (gitignored) or — for per-user keys set in the Settings window — in Electron `safeStorage`, which is OS-keychain-backed.
-- **Provider selection.** `CHAT_PROVIDER` / `VISION_PROVIDER` / `IMAGE_PROVIDER` can each be one of `xai | openai | mock`. Set to `xai` (default) and the backend will transparently fall back to OpenAI if the xAI key is missing or the call errors; set to `openai` to force a single backend.
+Set `CHAT_PROVIDER=mock` (and friends) for offline development.
+
+## Roadmap (examples)
+
+- Durable session store (SQLite) instead of in-memory only.
+- Richer per-artifact UI polish, connectors (calendar, mail), optional browser extension.
+
+## Notes
+
+- **`ELECTRON_RUN_AS_NODE`:** If a terminal sets this, Electron may not start a GUI. The desktop script clears it; use a clean shell if you hit a blank app.
+- **Keys** stay on the **sidecar**; the renderer only talks to `127.0.0.1` (plus optional `safeStorage` in Electron for user-provided keys in Settings).
+- For **agents**, keep **`CLAUDE.md`** and **`docs/`** in sync when behavior or IPC changes (see `docs/README.md`).
 
 ## License
 

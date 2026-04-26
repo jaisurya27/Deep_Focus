@@ -94,7 +94,8 @@ export type IdentifyArtifact = {
 export type RewriteArtifact = {
   kind: "rewrite";
   original?: string;
-  variants?: { tone: string; text: string }[];
+  tone?: string;
+  text?: string;
 };
 
 export type TasksCalendarArtifact = {
@@ -438,6 +439,17 @@ export type PriceMonitorArtifact = {
   status?: "watching" | "alert";
 };
 
+export type GenerateImageArtifact = {
+  kind: "generate_image";
+  title?: string;
+  prompt?: string;
+  data_url?: string | null;
+  image_provider?: string;
+  image_model?: string;
+  error?: string;
+};
+
+
 // Every concrete artifact may carry these suggestion hooks — the renderer
 // reads them on the raw object rather than requiring each union member to
 // redeclare them.
@@ -477,6 +489,7 @@ export type Artifact = (
   | PriceComparisonArtifact
   | PriceMonitorArtifact
   | DebateArtifact
+  | GenerateImageArtifact
   | GenericArtifact
 ) &
   WithSuggestions;

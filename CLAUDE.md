@@ -47,39 +47,38 @@ bindings, Electron bundle paths, and persisted settings.
 ```
 apps/desktop/            Electron + React
   src/main/
-    index.ts             app boot, shows the orb on startup
-    hotkeys.ts           Cmd+Ctrl+J (just-ask), Cmd+Ctrl+S (region), Cmd+Ctrl+H (toggle)
+    index.ts             app boot, shows the orb on startup (docked bottom-right)
+    hotkeys.ts           Cmd+Ctrl+J (ask/selection), S (region), H (toggle), L (focus)
     tray.ts              menu-bar icon + menu
-    ipc.ts               IPC handlers: open/hide panel, content-size, drag, settings…
+    ipc.ts               IPC: panel, capture, drag, PANEL_MINIMIZE (toggle), settings…
     settings.ts          electron-store + safeStorage for API keys, panel position
     windows/
-      panel.ts           THE orb/panel window: transparent, frameless, no native
-                         chrome, content-size driven, manual drag, position
-                         persisted across restarts.
+      panel.ts           orb/panel: transparent, frameless, content-size via IPC,
+                         drag, bottom-right on first launch, saved `panelPosition`
+                         (heals near-(0,0) legacy positions)
       overlay.ts         region-capture marching-ants overlay
       history.ts         full chat-history window
       settings.ts        settings window
-    capture/             selected-text fetch, region capture
+    capture/             selected-text, region, `fullscreen` (Outcome envelope for
+                         ambient + `needs_context` auto-retry; hides panel to grab)
     context/             active-window introspection
-  src/preload/index.ts   exposes `window.deepFocus.*` (panel, openHistory,
-                         openSettings, context, etc.)
+  src/preload/index.ts   `window.deepFocus.*` (panel onOpen / onMinimize, capture, …)
   src/renderer/          one React tree per HTML entry
     panel.html ↔ shell/GlanceShell.tsx     the orb + composer + floating artifacts
     history.html ↔ history.tsx             chat log
     settings.html ↔ settings.tsx           API keys + hotkeys + providers
     overlay.html ↔ overlay.tsx             region capture
     shell/
-      GlanceShell.tsx   orchestrator. Orb → thinking → expanded composer
-                        → floating artifact. Includes Stage (ResizeObserver
-                        → IPC window sizing) and DraggableOrb (pointer-driven
-                        window dragging).
+      GlanceShell.tsx   main UI: orb → expanded composer, `/artifact` with action
+                        `auto` + router, smart-context + `needs_context` retry, ambient
+                        screenshot only when there is *no* selected text (avoids
+                        mis-routes). Selection hotkey: no composer auto-focus
+                        (macOS key window). DraggableOrb + Stage (ResizeObserver → IPC)
       FloatingArtifact.tsx   dismissable wrapper around ArtifactCard
       icons.tsx         inline SVG icons
     artifacts/
       ActionBar.tsx     category-grouped action chips (Understand/Act/…)
       ArtifactCard.tsx  per-kind renderers (Translate, Math, CodeFix, Tasks, …)
-    panels/AnswerPanel  LEGACY chat panel (no longer rendered in shell; kept
-                        as reference while the Glance shell stabilizes)
     stores/session.ts   Zustand: messages, pendingSelection, pendingImage,
                         isStreaming, activeArtifact, …
     lib/api.ts          SSE wrappers: chat, vision, image, artifact (JSON-mode)
@@ -91,6 +90,9 @@ apps/desktop/            Electron + React
 services/backend/        FastAPI on 127.0.0.1:8765
   app/main.py           app factory, CORS, lifespan
   app/config.py         provider selection from env
+  app/router.py         LLM+heuristic `action: auto` router (text/image intent,
+                        `needs_context` for “what’s on my screen?”, image-only
+                        heuristics e.g. food/shopping)
   app/routes/
     chat.py             /chat           SSE text
     vision.py           /chat/vision    SSE multimodal
@@ -104,7 +106,8 @@ services/backend/        FastAPI on 127.0.0.1:8765
     mock.py             offline canned responses (fully streams too)
     _openai_compat.py   shared OpenAI-compatible SSE helper (supports
                         extra_payload for JSON mode)
-  app/artifacts.py      action taxonomy + JSON schemas + system prompts
+  app/artifacts.py      action taxonomy (answer, needs_context, food_order, map,
+                        shopping, weather, …) + JSON schemas + system prompts
   app/presets.py        preset system prompts (legacy panel)
   app/store/memory.py   in-memory session store, 14d purge
 ```
@@ -123,27 +126,28 @@ services/backend/        FastAPI on 127.0.0.1:8765
 - Active-window context attached as a system hint.
 
 ### Glance pivot (this branch of work)
-- **`POST /artifact` streams JSON-mode artifacts** (SSE: `meta`, `progress`,
-  `artifact`, `error`, `done`). Providers return guaranteed-parseable JSON via
-  `response_format: {"type": "json_object"}`.
-- **Orb-first shell** (`GlanceShell.tsx`): a 36px draggable orb that expands
-  into a small composer pill, swaps to a "thinking" Siri-style blob while
-  streaming, and pops floating artifact cards above the composer.
-- **Dynamic window sizing**: the Electron window tracks its *content* size via
-  a `ResizeObserver` → IPC loop. No giant invisible click-trap around the UI.
-- **Manual drag + persisted position**: `pointerdown/move/up` → IPC, position
-  saved to `electron-store`, restored on boot, clamped to the nearest display's
-  work area so it can't end up off-screen.
-- **Chromeless transparent window** on macOS (`resizable: false`,
-  `thickFrame: false`, `roundedCorners: false`) — nothing paints except our own
-  surfaces.
-- **Acrylic material** on every floating surface — heavy blur + saturation, a
-  thick opaque dark tint so it stays readable on white backgrounds, inner
-  highlights for a subtle bevel, plus a `.acrylic` utility class with noise
-  grain for extra depth. See `apps/desktop/src/renderer/styles.css`.
-- **Action bar & artifact renderers** stubbed for Translate, Math (with steps),
-  CodeFix, Tasks, Product, Recipe, Identify, Diagnose, Mermaid, DraftReply,
-  plus a generic fallback card.
+- **`POST /artifact` with `action: "auto"`** (default in the shell): backend
+  `router.py` picks the best artifact (vision when an image is attached). SSE
+  stream: `meta`, `progress`, `artifact`, `error`, `done`. `needs_context` when
+  the user asks about the screen without a screenshot — client captures and
+  retries.
+- **Orb-first shell** (`GlanceShell.tsx`): draggable orb, expanding composer
+  (streaming “thinking” state on the composer), floating artifact cards, action
+  rails, SmartCrumbs for selection/region. Region capture can auto-submit; text
+  selection: type a question, or **Enter** with an empty field → **"Explain this"**;
+  no composer **auto-focus** on hotkey selection (macOS key window / copy-hop).
+- **Ambient full-screen image**: attached **only** when the user has **no**
+  selected text (otherwise the router used to over-index on a webpage screenshot
+  and misfire e.g. UI critique). `capture.fullscreen` returns an `{ok,value}`-style
+  outcome from main.
+- **Dynamic window sizing**: `ResizeObserver` → `setContentSize` over IPC; Stage
+  halo margin for drop shadows.
+- **Manual drag + persisted position** (plus **first-launch** bottom-right dock
+  in `panel.ts` so the window is never left at 0,0).
+- **Chromeless transparent window** on macOS (`resizable: false`, etc.).
+- **Acrylic / glass** styling — `apps/desktop/src/renderer/styles.css`.
+- **Action bar & `ArtifactCard`** for many kinds (translate, code, `critique_ui`,
+  food_order, needs_context / `NeedsContextCard`, …) — extend as the catalog grows.
 - **Mock mode is first-class**, including JSON-mode streaming — every flow
   demoes offline without API keys.
 

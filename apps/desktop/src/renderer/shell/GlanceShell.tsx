@@ -25,6 +25,7 @@ import {
 import { Markdown } from "../lib/markdown";
 import { ArtifactActionRail, FloatingArtifact } from "./FloatingArtifact";
 import {
+  ChatIcon,
   CloseIcon,
   DragIcon,
   GearIcon,
@@ -150,7 +151,17 @@ export function GlanceShell() {
       }
       if (shouldExpand) {
         setExpanded(true);
-        requestAnimationFrame(() => inputRef.current?.focus());
+        // Hotkey-driven text selection: do NOT auto-focus the composer. Focusing
+        // the textarea makes Glance the macOS key window; the next Cmd+Ctrl+J
+        // copy-hop then fails with "clipboard unchanged" until the user
+        // manually clicks back into Chrome. The user can click the composer
+        // when they want to type. Other modes (just-ask, region, notices)
+        // still auto-focus.
+        const skipComposerFocus =
+          payload.mode === "selection" && payload.explicit;
+        if (!skipComposerFocus) {
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }
       }
     });
     return () => {
@@ -191,6 +202,14 @@ export function GlanceShell() {
     setDraft("");
     setPanelNotice(null);
   }, []);
+
+  // Collapse back to orb when the main process requests it (toggle hotkey
+  // hides the window). Ensures the panel re-appears as the orb — not the
+  // expanded composer — when the user toggles it back on.
+  useEffect(() => {
+    const off = window.deepFocus?.panel?.onMinimize?.(() => minimizeShell());
+    return () => { off?.(); };
+  }, [minimizeShell]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -312,9 +331,40 @@ export function GlanceShell() {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // Only send an image when the user explicitly captured one (region or
-      // fullscreen hotkey). No ambient capture on plain text queries.
-      const wireImage: string | null = imageUrl;
+      // Decide which image to send to the artifact router.
+      // 1. Explicit region capture (Cmd+Ctrl+S) or caller-provided image wins.
+      // 2. Ambient full-screen snapshot when there is no selected text AND
+      //    EITHER this is the first turn of the session OR the new query
+      //    looks like a fresh standalone ask (e.g. "summarize this page",
+      //    "what's on my screen now"). On a true follow-up
+      //    ("what is the final answer", "explain step 3"), skip the capture
+      //    so the backend's history replay can answer from the prior artifact
+      //    instead of being clobbered by a fresh image-only signal.
+      const hasPriorAssistant = useSession
+        .getState()
+        .messages.some((m) => m.role === "assistant" && (m.content || m.artifact));
+      const isFollowUp = hasPriorAssistant && looksLikeFollowUp(trimmedInstr);
+      // Image-gen requests use selected text as context; attaching a screenshot
+      // would make the router see an image and risk misrouting away from generate_image.
+      const isImageGen = looksLikeImageGen(trimmedInstr);
+      let wireImage: string | null = imageUrl;
+      if (!wireImage && !text && !isFollowUp && !isImageGen) {
+        try {
+          const t0 = performance.now();
+          const cap = await window.deepFocus?.capture?.fullscreen?.();
+          const ms = Math.round(performance.now() - t0);
+          if (cap?.ok && cap.value?.dataUrl) {
+            wireImage = cap.value.dataUrl;
+            console.info(
+              `[chat] ambient full-screen capture attached (${cap.value.width}×${cap.value.height}, ${ms}ms)`,
+            );
+          } else {
+            console.info(`[chat] ambient capture unavailable (${ms}ms) — no image context`);
+          }
+        } catch (err) {
+          console.warn("[chat] ambient capture threw — continuing without image:", err);
+        }
+      }
 
       try {
         const res = await runArtifact({
@@ -444,7 +494,10 @@ export function GlanceShell() {
   // --- Run an explicit artifact action (chip click / suggestion) ----
 
   const runAction = useCallback(
-    async (action: ActionSummary | { id: string; label?: string; needs_image?: boolean; needs_text?: boolean }) => {
+    async (
+      action: ActionSummary | { id: string; label?: string; needs_image?: boolean; needs_text?: boolean },
+      opts?: { userInstruction?: string | null },
+    ) => {
       if (isStreaming) return;
       const store = useSession.getState();
       // Prefer pending context, but fall back to whatever the previous user
@@ -533,6 +586,7 @@ export function GlanceShell() {
           action: action.id,
           text: sel?.text ?? null,
           imageDataUrl: img?.dataUrl ?? null,
+          userInstruction: opts?.userInstruction ?? null,
           sessionId: store.sessionId,
           windowContext: store.windowContext,
           signal: controller.signal,
@@ -756,6 +810,36 @@ export function GlanceShell() {
             ) : null}
           </AnimatePresence>
 
+          {/* Tone selector — one-tap rewrite of the captured text in a chosen
+              voice (Formal / Casual / Shorter / Friendlier / Simpler). Only
+              shown when a text selection is available (pendingSelection or a
+              prior user turn carries one). Each click fires `rewrite` with
+              the tone embedded as the user instruction; the backend now
+              returns a SINGLE rewrite (not the old 4-variant grid). */}
+          {(() => {
+            const lastUserSel = pendingSelection?.text
+              ? pendingSelection
+              : (() => {
+                  for (let i = messages.length - 1; i >= 0; i -= 1) {
+                    const m = messages[i];
+                    if (m.role === "user" && m.selection?.text) return m.selection;
+                  }
+                  return null;
+                })();
+            if (!lastUserSel?.text) return null;
+            return (
+              <ToneSelector
+                disabled={isStreaming}
+                onPick={(tone, label) =>
+                  void runAction(
+                    { id: "rewrite", label: `Rewrite · ${label}` },
+                    { userInstruction: `Rewrite the captured text in a ${tone} tone.` },
+                  )
+                }
+              />
+            );
+          })()}
+
           {/* Composer is ALWAYS rendered in expanded mode. While a turn is
               streaming, the input is disabled, the whole pill shows the
               traveling emerald border, and the Send button morphs into Stop.
@@ -773,12 +857,16 @@ export function GlanceShell() {
               streaming={isStreaming}
               onSend={() => {
                 const text = draft.trim();
-                // Allow empty-text send when an image is pending (e.g. user
-                // captured a region but auto-submit hasn't fired yet, or they
-                // dismissed the auto result and want to re-submit).
                 const hasPendingImage = !!useSession.getState().pendingImage;
-                if (!text && !hasPendingImage) return;
-                void sendText(text);
+                if (text) {
+                  void sendText(text);
+                } else if (hasPendingImage) {
+                  // Region capture: allow empty send (re-submit / auto flows).
+                  void sendText(text);
+                } else if (hasContext) {
+                  // Text selection, blank Enter → default to "Explain this".
+                  void sendText("Explain this");
+                }
               }}
               onStop={() => abortRef.current?.abort()}
               onMic={() => {
@@ -792,7 +880,7 @@ export function GlanceShell() {
                   : hasContext
                     ? lastAssistantMsg
                       ? "Ask a follow-up…"
-                      : "Ask anything about the attached context…"
+                      : "Type your question, or press Enter to explain…"
                     : mode === "region"
                       ? "Ask about the captured region…"
                       : "Ask anything…"
@@ -865,6 +953,14 @@ function TopBar({ onClose }: { onClose: () => void }) {
         {...dragHandlers}
       >
         <DragIcon />
+      </button>
+      <button
+        onClick={() => window.deepFocus?.history?.open?.()}
+        title="View full chat"
+        aria-label="View full chat"
+        className="glass flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-emerald-500/20 hover:text-emerald-100"
+      >
+        <ChatIcon className="h-3.5 w-3.5" />
       </button>
       <button
         onClick={onClose}
@@ -1099,6 +1195,17 @@ function FloatingAnswer({
   );
 }
 
+// Heuristic: does this prompt ask for image generation? Kept in sync with
+// the backend's `_IMAGE_GEN_RE` so the frontend can skip the visual-intent
+// auto-capture (no screenshot needed for image gen) and the backend's
+// pre-LLM override fires consistently.
+const IMAGE_GEN_RE =
+  /\b(generate\s+(an?\s+)?image|create\s+(an?\s+)?image|make\s+(an?\s+)?image|draw\s+(me\s+(an?\s+)?|an?\s+|a\s+picture\s+of\s+)|show\s+me\s+(an?\s+)?(image|picture|illustration|photo|visual)|render\s+(an?\s+|this\s+as\s+(an?\s+)?)?image|paint\s+(me\s+|an?\s+)?|illustrate\s+(this|it|me)|what\s+(would|does)\s+.{1,40}\s+look\s+like|picture\s+(of|this)|image\s+(of|for\s+this))\b/i;
+
+function looksLikeImageGen(instruction: string): boolean {
+  return IMAGE_GEN_RE.test(instruction.trim());
+}
+
 // Heuristic: does this prompt read as "please look at my screen"? Kept in
 // sync with the backend's `_VISUAL_INTENT_RE` so the fast path (capture
 // BEFORE shipping the turn) and the post-hoc path (backend returns
@@ -1110,6 +1217,29 @@ function looksLikeVisualIntent(instruction: string): boolean {
   const s = instruction.trim();
   if (!s) return false;
   return VISUAL_INTENT_RE.test(s);
+}
+
+// Heuristic: does this prompt read as a *follow-up* to the prior turn rather
+// than a fresh ask about the screen? We treat short, pronoun-heavy, or
+// reference-style questions as follow-ups so the backend's history replay
+// answers them without us silently snapping a fresh screenshot. Anything
+// containing an explicit visual intent (handled separately above) or a
+// substantive standalone question wins past this and re-grabs the screen.
+const FOLLOWUP_REFERENCE_RE =
+  /\b(it|its|that|this|those|these|the\s+(answer|result|final|previous|last|above|prior|step|option|first|second|third)|step\s*\d+|option\s*\d+|why|how\s+come|explain\s+(more|further|that|it|this|step)|elaborate|continue|go\s+on|simpl(?:er|ify)|shorter|in\s+one\s+line|tl;?dr|summarize\s+(it|that|this(?!\s+(screen|page|window|tab|app))))\b/i;
+
+function looksLikeFollowUp(instruction: string): boolean {
+  const s = instruction.trim();
+  if (!s) return false;
+  // Explicit visual intent overrides — "summarize this page" stays a fresh
+  // ask even mid-session.
+  if (VISUAL_INTENT_RE.test(s)) return false;
+  // Very short queries are almost always follow-ups ("why?", "and?",
+  // "what's the answer", "show steps"). 6 words or fewer counts as short.
+  const wordCount = s.split(/\s+/).filter(Boolean).length;
+  if (wordCount <= 6) return true;
+  // Otherwise look for explicit reference tokens.
+  return FOLLOWUP_REFERENCE_RE.test(s);
 }
 
 // Turn raw backend/fetch errors into something a human wants to read. Keeps
@@ -1364,6 +1494,49 @@ function buildSmartCrumbs({
   return out.filter((c) => c.prompt).slice(0, 5);
 }
 
+
+// ---------------------------------------------------------------------
+// ToneSelector — one-tap rewrite of the captured selection in a chosen
+// voice. Renders as a small row of pills directly above the composer so
+// the click→result loop is obvious. Fires `runAction("rewrite")` with the
+// tone embedded as a user instruction; the backend produces a SINGLE
+// rewrite (not the legacy 4-variant grid).
+// ---------------------------------------------------------------------
+
+const TONE_PRESETS: Array<{ id: string; label: string }> = [
+  { id: "formal", label: "Formal" },
+  { id: "casual", label: "Casual" },
+  { id: "shorter", label: "Shorter" },
+  { id: "friendlier", label: "Friendlier" },
+  { id: "simpler", label: "Simpler" },
+];
+
+function ToneSelector({
+  onPick,
+  disabled,
+}: {
+  onPick: (tone: string, label: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex w-full flex-wrap items-center gap-1.5 px-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-emerald-300/60">
+        Rewrite as
+      </span>
+      {TONE_PRESETS.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          disabled={disabled}
+          onClick={() => onPick(t.id, t.label)}
+          className="glass rounded-full border border-emerald-500/30 px-2.5 py-0.5 text-[11px] font-medium text-slate-100 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 hover:text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------
 // Composer pill — mic + text + [send|stop]. Streaming state = subtle

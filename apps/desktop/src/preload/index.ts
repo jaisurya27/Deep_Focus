@@ -19,6 +19,12 @@ const api = {
       ipcRenderer.on(IPC.PANEL_OPEN, wrapped);
       return () => ipcRenderer.removeListener(IPC.PANEL_OPEN, wrapped);
     },
+    /** Called by main before it hides the window via the toggle hotkey. */
+    onMinimize(listener: () => void) {
+      const wrapped = () => listener();
+      ipcRenderer.on(IPC.PANEL_MINIMIZE, wrapped);
+      return () => ipcRenderer.removeListener(IPC.PANEL_MINIMIZE, wrapped);
+    },
     hide() {
       ipcRenderer.send(IPC.PANEL_HIDE);
     },

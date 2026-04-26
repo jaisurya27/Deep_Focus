@@ -166,7 +166,9 @@ def get_image_provider() -> ImageProvider:
         return p
     if choice == "mock":
         return _mock_image()
-    return _openai_image() or _xai_image() or _mock_image()
+    # Auto order: xAI first (Grok image gen is the preferred provider),
+    # OpenAI as fallback, mock for offline demos.
+    return _xai_image() or _openai_image() or _mock_image()
 
 
 __all__ = [
