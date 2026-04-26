@@ -24,11 +24,29 @@ import { showPanel, getPanelWindow } from "../windows/panel";
 function ensureScreenRecordingPermission(): boolean {
   if (process.platform !== "darwin") return true;
   const status = systemPreferences.getMediaAccessStatus("screen");
-  console.info(`[region] screen recording permission status="${status}"`);
+  console.info(`[region] screen-recording permission status = "${status}"`);
   if (status === "granted") return true;
 
-  // Show a modal dialog explaining what to do, with a button that opens the
-  // correct System Settings pane directly.
+  // Surface the problem IN the Glance panel so the user always has visible
+  // feedback when the hotkey fires. The system dialog (below) can easily end
+  // up buried behind fullscreen apps, leaving them staring at an empty UI.
+  void showPanel({
+    mode: "just-ask",
+    explicit: true,
+    notice: {
+      tone: "warn",
+      title: "Screen Recording permission needed",
+      body:
+        "macOS hides screen content from Glance until you grant Screen Recording " +
+        "access. Open System Settings → Privacy & Security → Screen & System " +
+        "Audio Recording and toggle Electron / Deep Focus on, then relaunch.",
+      action: {
+        label: "Open System Settings",
+        href: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+      },
+    },
+  });
+
   void dialog
     .showMessageBox({
       type: "warning",
@@ -82,9 +100,9 @@ const startPayloadByContents = new Map<number, StartPayload>();
 export async function startRegionCapture(opts?: {
   windowContext?: WindowContext | null;
 }): Promise<void> {
-  console.info("[region] startRegionCapture called");
+  console.info("[region] startRegionCapture invoked");
   if (pending) {
-    console.warn("[region] capture already in flight — ignoring");
+    console.warn("[region] already pending — ignoring new invocation");
     return;
   }
 
@@ -175,7 +193,9 @@ export async function startRegionCapture(opts?: {
       });
 
       win.once("ready-to-show", () => {
-        console.info("[region] overlay ready-to-show — calling win.show()");
+        console.info(
+          `[region] overlay ready on display ${display.id} (${bounds.width}×${bounds.height})`,
+        );
         win.show();
         win.focus();
       });
@@ -240,7 +260,16 @@ function wireIpcOnce() {
       });
     } catch (err) {
       console.error("[region] capture failed:", err);
-      // Surface the error so the user isn't left staring at a dismissed overlay.
+      void showPanel({
+        mode: "just-ask",
+        explicit: true,
+        notice: {
+          tone: "error",
+          title: "Region capture failed",
+          body:
+            err instanceof Error ? err.message : "Unknown error while capturing screen.",
+        },
+      });
       void dialog.showMessageBox({
         type: "error",
         title: "Region capture failed",
@@ -254,8 +283,12 @@ function wireIpcOnce() {
     }
   });
 
-  ipcMain.on(IPC.OVERLAY_CANCEL, () => {
-    if (!pending) return;
+  ipcMain.on(IPC.OVERLAY_CANCEL, (_event, reason: string | null) => {
+    console.info(`[region] OVERLAY_CANCEL received — reason=${reason ?? "(none)"}`);
+    if (!pending) {
+      console.warn("[region] no pending capture — ignoring OVERLAY_CANCEL");
+      return;
+    }
     closeOverlay(pending);
   });
 }

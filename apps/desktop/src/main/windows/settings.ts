@@ -17,7 +17,7 @@ export async function openSettingsWindow(): Promise<BrowserWindow> {
     height: 560,
     minWidth: 460,
     minHeight: 380,
-    title: "Deep Focus — Settings",
+    title: "Glance — Settings",
     backgroundColor: "#020617",
     show: false,
     webPreferences: {

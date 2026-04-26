@@ -24,7 +24,7 @@ function buildInlineTrayIcon(): NativeImage {
 export function createTray() {
   if (tray) return tray;
   tray = new Tray(buildInlineTrayIcon());
-  tray.setToolTip("Deep Focus — Cmd+Ctrl+J to ask");
+  tray.setToolTip("Glance — Cmd+Ctrl+J to ask");
   // Visible text label next to the (empty) icon — makes the tray
   // impossible to miss on a crowded menu bar.
   if (process.platform === "darwin") {
@@ -39,7 +39,7 @@ export function createTray() {
       Menu.buildFromTemplate([
         {
           label: `Ask / Explain Selection  (${justAsk})`,
-          click: () => showPanel({ mode: "just-ask" }),
+          click: () => showPanel({ mode: "just-ask", explicit: true }),
         },
         {
           label: `Capture Region  (${regionCapture})`,
@@ -62,16 +62,16 @@ export function createTray() {
         },
         { type: "separator" },
         {
-          label: "About Deep Focus",
-          click: () => app.setAboutPanelOptions({ applicationName: "Deep Focus" }),
+          label: "About Glance",
+          click: () => app.setAboutPanelOptions({ applicationName: "Glance" }),
         },
-        { role: "quit", label: "Quit Deep Focus" },
+        { role: "quit", label: "Quit Glance" },
       ]),
     );
   };
 
   // Clicking the tray icon itself surfaces the panel in just-ask mode.
-  tray.on("click", () => showPanel({ mode: "just-ask" }));
+  tray.on("click", () => showPanel({ mode: "just-ask", explicit: true }));
   rebuildMenu();
   return tray;
 }

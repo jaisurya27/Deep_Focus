@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import type { Artifact } from "../../shared/artifacts";
 import type { PanelMode, WindowContext } from "../../shared/ipc";
 
 export type ChatRole = "user" | "assistant" | "system";
@@ -32,6 +33,10 @@ export type ChatMessage = {
   image?: AttachedImage | null;
   /** Image generated *by the assistant* (Visual Metaphor preset). */
   generatedImage?: { dataUrl?: string; url?: string; caption?: string } | null;
+  /** Typed artifact (translate / recipe / fix_code / …) this turn produced. */
+  artifact?: Artifact | null;
+  /** Action id that produced the artifact, if any. */
+  action?: string | null;
 };
 
 type SessionState = {

@@ -28,6 +28,11 @@ export const IPC = {
   SETTINGS_GET_API_KEY_STATE: "settings:get-api-key-state",
   SETTINGS_CLEAR_HISTORY: "settings:clear-history",
   WINDOW_CONTEXT_GET: "window-context:get",
+  PANEL_CLICK_THROUGH: "panel:click-through",
+  PANEL_SET_CONTENT_SIZE: "panel:set-content-size",
+  PANEL_DRAG_START: "panel:drag-start",
+  PANEL_DRAG_MOVE: "panel:drag-move",
+  OPEN_EXTERNAL: "shell:open-external",
 } as const;
 
 export type PanelMode = "just-ask" | "selection" | "region";
@@ -57,6 +62,24 @@ export type PanelOpenPayload = {
   windowContext?: WindowContext | null;
   /** App that owned the selection when the hotkey fired. */
   sourceApp?: string | null;
+  /**
+   * User intent flag. True when the user explicitly invoked Glance (hotkey,
+   * tray click, "Just ask"). False/omitted for passive nudges like startup,
+   * where we want to show only the idle orb.
+   */
+  explicit?: boolean;
+  /**
+   * Optional banner message to surface in the panel — used when the main
+   * process wants to tell the user something went wrong (e.g. Screen
+   * Recording permission missing) rather than silently bailing.
+   */
+  notice?: {
+    tone: "info" | "warn" | "error";
+    title: string;
+    body?: string;
+    /** Deep link the renderer can expose as a button. */
+    action?: { label: string; href: string };
+  } | null;
 };
 
 export type Settings = {
@@ -72,6 +95,8 @@ export type Settings = {
   focusModeEnabled: boolean;
   onboardingComplete: boolean;
   visionPreferred: "openai" | "xai" | "auto";
+  /** Last user-chosen panel position in screen pixels. Null = auto-anchor. */
+  panelPosition: { x: number; y: number } | null;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -89,4 +114,5 @@ export const DEFAULT_SETTINGS: Settings = {
   focusModeEnabled: false,
   onboardingComplete: false,
   visionPreferred: "auto",
+  panelPosition: null,
 };

@@ -22,6 +22,18 @@ const api = {
     hide() {
       ipcRenderer.send(IPC.PANEL_HIDE);
     },
+    setClickThrough(passthrough: boolean) {
+      ipcRenderer.send(IPC.PANEL_CLICK_THROUGH, passthrough);
+    },
+    setContentSize(width: number, height: number) {
+      ipcRenderer.send(IPC.PANEL_SET_CONTENT_SIZE, { width, height });
+    },
+    dragStart(mouseX: number, mouseY: number) {
+      ipcRenderer.send(IPC.PANEL_DRAG_START, { mouseX, mouseY });
+    },
+    dragMove(mouseX: number, mouseY: number) {
+      ipcRenderer.send(IPC.PANEL_DRAG_MOVE, { mouseX, mouseY });
+    },
   },
   overlay: {
     onStart(listener: (payload: { display: Electron.Rectangle; captureSize: { width: number; height: number } }) => void) {
@@ -44,8 +56,8 @@ const api = {
     complete(rect: { x: number; y: number; width: number; height: number }) {
       ipcRenderer.send(IPC.OVERLAY_COMPLETE, rect);
     },
-    cancel() {
-      ipcRenderer.send(IPC.OVERLAY_CANCEL);
+    cancel(reason?: string) {
+      ipcRenderer.send(IPC.OVERLAY_CANCEL, reason ?? null);
     },
   },
   history: {
@@ -100,6 +112,11 @@ const api = {
       | null
     > {
       return ipcRenderer.invoke(IPC.CAPTURE_FULLSCREEN);
+    },
+  },
+  shell: {
+    openExternal(href: string) {
+      ipcRenderer.send(IPC.OPEN_EXTERNAL, href);
     },
   },
 };

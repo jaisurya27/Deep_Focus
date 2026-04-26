@@ -1,4 +1,4 @@
-import { app, ipcMain, safeStorage } from "electron";
+import { app, ipcMain, safeStorage, shell } from "electron";
 
 import { IPC, type Settings } from "../shared/ipc";
 import { getActiveWindowContext } from "./context/active-window";
@@ -7,13 +7,53 @@ import { getSettings, setSettings, getSecret, setSecret } from "./settings";
 import { registerHotkeys } from "./hotkeys";
 import { openHistoryWindow } from "./windows/history";
 import { openSettingsWindow } from "./windows/settings";
-import { hidePanel } from "./windows/panel";
+import {
+  beginPanelDrag,
+  getPanelWindow,
+  hidePanel,
+  resizePanelContent,
+  updatePanelDrag,
+} from "./windows/panel";
 import { clearAllSessionsRemote } from "./history";
 
 export function registerIpc() {
   ipcMain.on(IPC.PANEL_HIDE, () => {
     hidePanel();
   });
+
+  ipcMain.on(IPC.PANEL_CLICK_THROUGH, (_e, passthrough: boolean) => {
+    const win = getPanelWindow();
+    if (!win || win.isDestroyed()) return;
+    if (passthrough) {
+      win.setIgnoreMouseEvents(true, { forward: true });
+    } else {
+      win.setIgnoreMouseEvents(false);
+    }
+  });
+
+  ipcMain.on(
+    IPC.PANEL_SET_CONTENT_SIZE,
+    (_e, payload: { width: number; height: number }) => {
+      if (!payload) return;
+      resizePanelContent(payload.width, payload.height);
+    },
+  );
+
+  ipcMain.on(
+    IPC.PANEL_DRAG_START,
+    (_e, payload: { mouseX: number; mouseY: number }) => {
+      if (!payload) return;
+      beginPanelDrag(payload.mouseX, payload.mouseY);
+    },
+  );
+
+  ipcMain.on(
+    IPC.PANEL_DRAG_MOVE,
+    (_e, payload: { mouseX: number; mouseY: number }) => {
+      if (!payload) return;
+      updatePanelDrag(payload.mouseX, payload.mouseY);
+    },
+  );
 
   ipcMain.handle(IPC.SETTINGS_GET, () => getSettings());
 
@@ -69,5 +109,17 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.SETTINGS_CLEAR_HISTORY, async () => {
     await clearAllSessionsRemote();
+  });
+
+  ipcMain.on(IPC.OPEN_EXTERNAL, (_e, href: string) => {
+    if (typeof href !== "string" || !href) return;
+    // Allow http(s) and macOS System Settings deep links; refuse anything else
+    // so a renderer-side bug can't be coerced into launching arbitrary URIs.
+    const ok =
+      href.startsWith("http://") ||
+      href.startsWith("https://") ||
+      href.startsWith("x-apple.systempreferences:");
+    if (!ok) return;
+    void shell.openExternal(href);
   });
 }

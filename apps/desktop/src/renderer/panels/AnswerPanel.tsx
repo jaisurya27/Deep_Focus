@@ -7,9 +7,13 @@ import {
   useState,
 } from "react";
 
+import type { ActionSummary } from "../../shared/artifacts";
+import { ActionBar } from "../artifacts/ActionBar";
+import { ArtifactCard } from "../artifacts/ArtifactCard";
 import {
   checkHealth,
   generateImage,
+  runArtifact,
   streamChat,
   streamVision,
   type HealthResponse,
@@ -327,6 +331,82 @@ export function AnswerPanel() {
     [],
   );
 
+  const runAction = useCallback(
+    async (action: ActionSummary) => {
+      if (isStreaming) return;
+      const store = useSession.getState();
+      const sel = store.pendingSelection;
+      const img = store.pendingImage;
+      const hasText = !!sel?.text?.trim();
+      const hasImage = !!img?.dataUrl;
+      if (action.needs_image && !hasImage) return;
+      if (action.needs_text && !hasText && !hasImage) return;
+
+      const userMsg: ChatMessage = {
+        id: makeMessageId(),
+        role: "user",
+        content: action.label,
+        source: store.mode,
+        preset: `artifact:${action.id}`,
+        selection: sel ?? null,
+        image: img ?? null,
+        action: action.id,
+      };
+      const assistantMsg: ChatMessage = {
+        id: makeMessageId(),
+        role: "assistant",
+        content: "",
+        streaming: true,
+        source: store.mode,
+        preset: `artifact:${action.id}`,
+        action: action.id,
+      };
+      store.appendMessage(userMsg);
+      store.appendMessage(assistantMsg);
+      store.setStreaming(true);
+      store.setPendingSelection(null);
+      store.setPendingImage(null);
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        const res = await runArtifact({
+          action: action.id,
+          text: sel?.text ?? null,
+          imageDataUrl: img?.dataUrl ?? null,
+          sessionId: store.sessionId,
+          windowContext: store.windowContext,
+          signal: controller.signal,
+        });
+        useSession.getState().updateMessage(assistantMsg.id, {
+          streaming: false,
+          artifact: res.artifact,
+          content: "",
+        });
+        if (res.meta?.session_id) {
+          useSession.getState().setSessionId(res.meta.session_id);
+        }
+        if (res.meta?.provider && res.meta?.model) {
+          useSession
+            .getState()
+            .setProviderLabel(`${res.meta.provider} · ${res.meta.model}`);
+        }
+      } catch (err) {
+        useSession
+          .getState()
+          .failMessage(
+            assistantMsg.id,
+            err instanceof Error ? err.message : String(err),
+          );
+      } finally {
+        useSession.getState().setStreaming(false);
+        abortRef.current = null;
+      }
+    },
+    [isStreaming],
+  );
+
   const send = useCallback(
     (preset?: string | null) => {
       const hasContext =
@@ -445,6 +525,13 @@ export function AnswerPanel() {
         }}
       />
 
+      <ActionBar
+        hasText={!!pendingSelection?.text}
+        hasImage={!!pendingImage?.dataUrl}
+        disabled={isStreaming}
+        onPick={(action) => void runAction(action)}
+      />
+
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4">
         {messages.length === 0 ? (
           <EmptyState
@@ -545,8 +632,8 @@ function Header({
     >
       <div className="flex min-w-0 items-center gap-2">
         <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]" />
-        <span className="font-mono text-[11px] uppercase tracking-wider text-slate-300">
-          Deep Focus
+        <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-200">
+          Glance
         </span>
         <span className="shrink-0 rounded-full border border-slate-700/70 bg-slate-900/70 px-2 py-[2px] text-[10px] uppercase tracking-wider">
           {sourceChipLabel}
@@ -712,7 +799,7 @@ function EmptyState({
             Accessibility permission needed
           </div>
           macOS just opened <strong>System Settings → Privacy &amp; Security → Accessibility</strong>.
-          Enable <strong>Deep Focus</strong> there, then press the hotkey again.
+          Enable <strong>Glance</strong> there, then press the hotkey again.
         </div>
       ) : null}
       {healthMessage ? (
@@ -727,9 +814,9 @@ function EmptyState({
 function Onboarding({ onDismiss }: { onDismiss: () => void }) {
   return (
     <div className="mx-auto max-w-[380px] rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4 text-left">
-      <div className="mb-2 flex items-center justify-between">
+        <div className="mb-2 flex items-center justify-between">
         <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-emerald-400">
-          Welcome to Deep Focus
+          Welcome to Glance
         </div>
         <button
           onClick={onDismiss}
@@ -810,6 +897,15 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     );
   }
+  if (message.artifact) {
+    return (
+      <div className="flex justify-start">
+        <div className="flex w-full max-w-[96%] flex-col gap-2">
+          <ArtifactCard artifact={message.artifact} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex justify-start">
       <div
@@ -817,7 +913,14 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           message.streaming ? "streaming-caret" : ""
         }`}
       >
-        <Markdown content={message.content} />
+        {message.streaming && !message.content ? (
+          <div className="flex items-center gap-1.5 text-[12px] text-slate-500">
+            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+            Thinking…
+          </div>
+        ) : (
+          <Markdown content={message.content} />
+        )}
         {message.generatedImage?.dataUrl || message.generatedImage?.url ? (
           <figure className="mt-1">
             <img

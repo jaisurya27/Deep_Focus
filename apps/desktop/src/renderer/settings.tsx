@@ -87,7 +87,7 @@ function App() {
   return (
     <div className="flex h-screen w-screen flex-col overflow-y-auto bg-slate-950 px-8 py-8 text-slate-200">
       <h1 className="font-mono text-[12px] uppercase tracking-[0.25em] text-emerald-400">
-        Deep Focus · Settings
+        Glance · Settings
       </h1>
 
       <Section title="Hotkeys" hint="Click a field and press the new combination.">
@@ -142,7 +142,7 @@ function App() {
       <Section title="General">
         <ToggleRow
           label="Launch on startup"
-          description="Register Deep Focus as a login item."
+          description="Register Glance as a login item."
           value={settings.launchOnStartup}
           onChange={(v) => patch({ launchOnStartup: v })}
         />
