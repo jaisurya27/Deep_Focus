@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["artifact"])
 
+# How many prior user/assistant exchanges we replay as context on follow-ups.
+# Matches `/chat` so the two pipelines feel coherent. "Lazy context" means we
+# trust the existing session to thread history through; it does NOT mean no
+# context. Without this replay the model forgets the last turn entirely and
+# follow-up questions read as cold-start asks.
+MAX_CONTEXT_EXCHANGES = 8
+# Per-message hard cap when replaying. Assistant turns from this route are
+# stored as the full artifact JSON (already capped at 8000); for follow-ups
+# we only need a digest — keep it smaller so the wire stays lean.
+REPLAY_CHAR_CAP = 1800
+
 
 class ArtifactRequest(BaseModel):
     action: str
@@ -131,12 +142,19 @@ async def _artifact_event_stream(
     spec = ACTIONS[chosen_action]
     user_payload = _user_payload(req.text, req.user_instruction, spec.label)
 
+    # Replay prior turns so follow-ups ("what about option 2?") resolve
+    # against what the assistant just said. Artifact responses persisted by
+    # `_persist` below are raw JSON; we condense them before wiring them
+    # back in so the context stays readable instead of a wall of braces.
+    history = _history_wire(session_id)
+
     # Select provider + build wire payload.
     if has_image:
         provider = get_vision_provider()
         wire = [
             {"role": "system", "content": spec.system_prompt},
             _window_hint(req.window_context),
+            *history,
             {
                 "role": "user",
                 "content": [
@@ -152,6 +170,7 @@ async def _artifact_event_stream(
         wire = [
             {"role": "system", "content": spec.system_prompt},
             _window_hint(req.window_context),
+            *history,
             {"role": "user", "content": user_payload},
         ]
         wire = [m for m in wire if m]
@@ -269,6 +288,64 @@ def _user_payload(text: str | None, extra: str | None, label: str) -> str:
     else:
         chunks.append("(No text — use the attached image as the context.)")
     return "\n\n".join(chunks)
+
+
+def _history_wire(session_id: str) -> list[dict[str, Any]]:
+    """Replay the last few user/assistant turns for follow-up coherence.
+
+    Assistant turns from `/artifact` are stored as the full artifact JSON.
+    We condense them to a short natural-language digest here so the model
+    sees "what it said last time" without being re-primed to emit the same
+    structure verbatim (which confused JSON-mode on the next turn).
+    """
+    session = store.get(session_id)
+    if session is None or not session.messages:
+        return []
+    out: list[dict[str, Any]] = []
+    for m in session.messages[-MAX_CONTEXT_EXCHANGES:]:
+        if m.role not in ("user", "assistant"):
+            continue
+        content = m.content or ""
+        if m.role == "assistant":
+            content = _condense_assistant(content)
+        if not content:
+            continue
+        if len(content) > REPLAY_CHAR_CAP:
+            content = content[:REPLAY_CHAR_CAP].rstrip() + "…"
+        out.append({"role": m.role, "content": content})
+    return out
+
+
+def _condense_assistant(content: str) -> str:
+    """Turn a stored artifact JSON blob into a short prose digest."""
+    s = (content or "").strip()
+    if not s:
+        return ""
+    if not s.startswith("{"):
+        return s
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError:
+        return s
+    if not isinstance(data, dict):
+        return s
+    # Prefer the fields most likely to carry the user-visible answer.
+    for key in ("body", "answer", "text", "summary", "explanation", "translation"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            kind = data.get("kind") or data.get("action") or "artifact"
+            return f"[{kind}] {val.strip()}"
+    # Fallback: serialize the whole dict minus noisy/large keys so the
+    # downstream model still sees the gist.
+    trimmed = {
+        k: v
+        for k, v in data.items()
+        if k not in ("suggested_alternatives", "suggested_action", "followups")
+    }
+    try:
+        return json.dumps(trimmed, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return s
 
 
 def _window_hint(ctx: dict | None) -> dict | None:

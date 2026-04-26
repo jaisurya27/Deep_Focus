@@ -151,6 +151,32 @@ Design rules:
 - **Drop shadow** is what makes the pill feel *floating*. Its reach dictates
   `HALO_MARGIN`. If you change the drop shadow's blur/offset, bump halo too.
 
+## Shell anatomy (expanded state)
+
+Stack, top-down:
+
+1. **Header row** — a single horizontal ribbon above everything. Left
+   slot: `ArtifactActionRail` (Copy / Follow-up / Full chat / Dismiss),
+   rendered only when an artifact is on screen. Right slot: the `TopBar`
+   (drag handle + ×), always present. All seven pills are `h-6 w-6`
+   glass pills with 14px SVGs — a whisper-quiet row, not a toolbar. Each
+   action button expands to reveal an uppercase label on hover/focus.
+   The × calls `minimizeShell` which aborts any in-flight turn, calls
+   `clearOutput()`, then collapses. Works mid-stream.
+2. **Optional banners** — `healthWarning`, `panelNotice`.
+3. **Optional context chip** — selection/image preview (hidden once an
+   artifact is on screen).
+4. **Smart crumbs** — heuristic one-tap prompts for the current context.
+5. **Output slot** — `FloatingArtifact` (structured) or `FloatingAnswer`
+   (text); only one at a time. The artifact body is just the card now;
+   its actions live in the header row above.
+6. **Composer** — always rendered. Doubles as the thinking surface during a
+   turn (see below).
+
+There is no separate "thinking" blob / aurora surface anymore. The
+composer IS the thinking surface — streaming === traveling emerald border
++ disabled textarea + Send→Stop button swap.
+
 ## Dismiss gestures (two tiers + one hard reset)
 
 We used to have one universal `minimizeShell` wired to every ×. Problem: the
@@ -158,24 +184,31 @@ artifact's "Dismiss" button *felt* like "get rid of this answer" but actually
 just collapsed the shell, and the answer came right back when the user
 tapped the orb again. The taxonomy is now:
 
-**1. Minimize the shell (preserves everything).** Collapses to orb; context
-chip, notice banner, last answer/artifact, pending selection/image all stay.
+**1. Minimize the shell (collapse to orb).** Aborts any in-flight turn,
+clears current output, collapses. Session id + provider label persist.
 
-- `×` on the composer pill.
-- `Esc` key (if not currently streaming; during stream, Esc = Stop).
+- `×` on the `TopBar` (always available, including mid-stream).
+- `Esc` key (if not currently streaming; during stream, Esc = Stop then
+  another Esc = collapse).
 
-**2. Clear the output (keeps session id).** Drops `messages`,
-`pendingSelection`, `pendingImage` from the store via `clearOutput()`. The
-backend session id and provider label stay so a mid-conversation follow-up
-still threads. The shell stays expanded with a blank composer.
+**2. Clear the output (keeps session id, keeps shell open).** Drops
+`messages`, `pendingSelection`, `pendingImage` from the store via
+`clearOutput()`. Shell stays expanded with a blank composer.
 
+- Composer `×` when there's output on screen and the draft is empty.
+- Composer `×` when the draft is non-empty clears the *draft*, not the
+  output — tap again to clear the output.
 - `×` ("Dismiss") on `FloatingArtifact`.
-- `×` on `FloatingAnswer` (hidden while streaming; use "Stop" then ×).
+- `×` on `FloatingAnswer` (hidden while streaming).
 - Automatically fired from the `onOpen` IPC handler on every new selection
   or region capture, so a fresh capture never shows the previous turn's
   output.
 
-**3. Hard reset (`Cmd+K`).** `useSession.getState().clear()` — wipes messages,
+**3. Stop (abort an in-flight turn).** Composer's Send button morphs into a
+rose Stop button while `streaming === true`. Calls `abortRef.current.abort()`.
+Same thing Esc does mid-stream.
+
+**4. Hard reset (`Cmd+K`).** `useSession.getState().clear()` — wipes messages,
 session id, pending context, panel notice. Use this when you want a truly
 new conversation.
 

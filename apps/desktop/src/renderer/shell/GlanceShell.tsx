@@ -23,13 +23,15 @@ import {
   type ChatMessage,
 } from "../stores/session";
 import { Markdown } from "../lib/markdown";
-import { FloatingArtifact } from "./FloatingArtifact";
+import { ArtifactActionRail, FloatingArtifact } from "./FloatingArtifact";
 import {
   CloseIcon,
+  DragIcon,
   GearIcon,
   MicIcon,
   SendIcon,
   SparkleIcon,
+  StopIcon,
 } from "./icons";
 
 // ---------------------------------------------------------------------
@@ -59,7 +61,7 @@ export function GlanceShell() {
   const [panelNotice, setPanelNotice] = useState<
     NonNullable<PanelOpenPayload["notice"]> | null
   >(null);
-  const [artifactProgress, setArtifactProgress] = useState(0);
+  const [, setArtifactProgress] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -87,15 +89,15 @@ export function GlanceShell() {
 
   const hasContext = !!pendingSelection?.text || !!pendingImage?.dataUrl;
 
-  // Auto-expand while a turn is streaming, when an artifact lands, or when
-  // the main process surfaces a notice. Context arrival is handled by the
-  // IPC onOpen handler below so the user can collapse-with-context and have
-  // the orb stay collapsed until they explicitly tap it again.
+  // Auto-expand when an artifact lands or a notice is surfaced. Context
+  // arrival is handled by the IPC onOpen handler below. We deliberately do
+  // NOT re-expand on `isStreaming` — if the user closes the shell mid-turn
+  // we abort and respect the close.
   useEffect(() => {
-    if (isStreaming || lastArtifactMsg || panelNotice) {
+    if (lastArtifactMsg || panelNotice) {
       setExpanded(true);
     }
-  }, [isStreaming, lastArtifactMsg, panelNotice]);
+  }, [lastArtifactMsg, panelNotice]);
 
   // --- Wire up panel open / health -----------------------------------
 
@@ -172,10 +174,13 @@ export function GlanceShell() {
     };
   }, []);
 
-  // ONE universal dismiss gesture: tuck away to the orb, preserve state.
-  // Context survives across minimize/reopen. To nuke everything (context +
-  // chat history) use Cmd+K — that's the one explicit reset.
+  // Tuck away to the orb. We abort any in-flight turn AND clear the current
+  // output so the auto-expand effect (which re-opens on `lastArtifactMsg` or
+  // `panelNotice`) doesn't immediately bounce us back open. Session id +
+  // provider label stay — Cmd+K is the hard reset.
   const minimizeShell = useCallback(() => {
+    abortRef.current?.abort();
+    useSession.getState().clearOutput();
     setExpanded(false);
     setDraft("");
     setPanelNotice(null);
@@ -204,7 +209,7 @@ export function GlanceShell() {
   // Routing info for the in-flight auto turn (what the agent *picked*). This
   // lets the thinking pill show a "Routing → Explain code" breadcrumb before
   // the artifact lands, and drives the suggestion chips beside the artifact.
-  const [lastRouting, setLastRouting] = useState<RoutingInfo | null>(null);
+  const [, setLastRouting] = useState<RoutingInfo | null>(null);
 
   // --- Run an auto-routed artifact (composer free-form) --------------
   //
@@ -293,12 +298,15 @@ export function GlanceShell() {
             .setProviderLabel(`${res.meta.provider} · ${res.meta.model}`);
         }
       } catch (err) {
-        useSession
-          .getState()
-          .failMessage(
-            assistantMsg.id,
-            err instanceof Error ? err.message : String(err),
-          );
+        const message = err instanceof Error ? err.message : String(err);
+        useSession.getState().failMessage(assistantMsg.id, message);
+        if (!controller.signal.aborted) {
+          setPanelNotice({
+            tone: "error",
+            title: "That didn't go through",
+            body: humanizeBackendError(message),
+          });
+        }
       } finally {
         useSession.getState().setStreaming(false);
         abortRef.current = null;
@@ -317,12 +325,41 @@ export function GlanceShell() {
     async (action: ActionSummary | { id: string; label?: string; needs_image?: boolean; needs_text?: boolean }) => {
       if (isStreaming) return;
       const store = useSession.getState();
-      const sel = store.pendingSelection;
-      const img = store.pendingImage;
+      // Prefer pending context, but fall back to whatever the previous user
+      // turn carried. This is crucial for "Try instead" suggestions: the
+      // pending slots are cleared after each send, so without this fallback
+      // the backend sees no text/image and 400s.
+      let sel = store.pendingSelection;
+      let img = store.pendingImage;
+      if (!sel?.text && !img?.dataUrl) {
+        for (let i = store.messages.length - 1; i >= 0; i -= 1) {
+          const m = store.messages[i];
+          if (m.role !== "user") continue;
+          if (m.selection?.text || m.image?.dataUrl) {
+            sel = m.selection ?? null;
+            img = m.image ?? null;
+            break;
+          }
+        }
+      }
       const hasText = !!sel?.text?.trim();
       const hasImg = !!img?.dataUrl;
-      if (action.needs_image && !hasImg) return;
-      if (action.needs_text && !hasText && !hasImg) return;
+      if (action.needs_image && !hasImg) {
+        setPanelNotice({
+          tone: "warn",
+          title: `${action.label ?? action.id} needs an image`,
+          body: "Capture a region (Cmd+Ctrl+S) and try again.",
+        });
+        return;
+      }
+      if (action.needs_text && !hasText && !hasImg) {
+        setPanelNotice({
+          tone: "warn",
+          title: `${action.label ?? action.id} needs context`,
+          body: "Select some text or capture a region first.",
+        });
+        return;
+      }
 
       const userMsg: ChatMessage = {
         id: makeMessageId(),
@@ -382,12 +419,15 @@ export function GlanceShell() {
             .setProviderLabel(`${res.meta.provider} · ${res.meta.model}`);
         }
       } catch (err) {
-        useSession
-          .getState()
-          .failMessage(
-            assistantMsg.id,
-            err instanceof Error ? err.message : String(err),
-          );
+        const message = err instanceof Error ? err.message : String(err);
+        useSession.getState().failMessage(assistantMsg.id, message);
+        if (!controller.signal.aborted) {
+          setPanelNotice({
+            tone: "error",
+            title: `${action.label ?? action.id} failed`,
+            body: humanizeBackendError(message),
+          });
+        }
       } finally {
         useSession.getState().setStreaming(false);
         abortRef.current = null;
@@ -420,8 +460,10 @@ export function GlanceShell() {
   // Render
   // ------------------------------------------------------------------
 
-  // Collapsed: just the orb.
-  if (!expanded && !isStreaming && !lastArtifactMsg && !panelNotice) {
+  // Collapsed: just the orb. (We intentionally ignore `isStreaming` here so
+  // a user who hits × during a turn really does collapse — minimizeShell
+  // already aborted the in-flight controller.)
+  if (!expanded && !lastArtifactMsg && !panelNotice) {
     return (
       <Stage>
         <LayoutGroup id="glance-shell">
@@ -456,18 +498,26 @@ export function GlanceShell() {
   return (
     <Stage>
       <LayoutGroup id="glance-shell">
-        <motion.div
-          layout
-          transition={SPRING_SOFT}
-          className="flex w-[520px] flex-col items-end gap-2.5"
-        >
-          <DragGrip />
+        <div className="flex w-[520px] flex-col items-end gap-2.5">
+          <div className="flex w-full items-center justify-between gap-2">
+            <div className="flex items-center gap-1">
+              {lastArtifactMsg?.artifact ? (
+                <ArtifactActionRail
+                  artifact={lastArtifactMsg.artifact}
+                  onClose={dismissArtifact}
+                  onFollowUp={followUp}
+                  onOpenChat={() => window.deepFocus?.history?.open?.()}
+                />
+              ) : null}
+            </div>
+            <TopBar onClose={minimizeShell} />
+          </div>
 
           <AnimatePresence initial={false}>
             {healthWarning ? (
               <motion.div
                 key="health"
-                layout
+
                 initial={{ opacity: 0, y: -6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
@@ -481,20 +531,23 @@ export function GlanceShell() {
             {panelNotice ? (
               <motion.div
                 key="notice"
-                layout
+
                 initial={{ opacity: 0, y: -6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
                 transition={SPRING_SOFT}
               >
-                <NoticeBanner notice={panelNotice} />
+                <NoticeBanner
+                  notice={panelNotice}
+                  onDismiss={() => setPanelNotice(null)}
+                />
               </motion.div>
             ) : null}
 
             {hasContext && !lastArtifactMsg ? (
               <motion.div
                 key="context-chip"
-                layout
+
                 initial={{ opacity: 0, y: -6, scale: 0.96 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -6, scale: 0.96 }}
@@ -507,7 +560,7 @@ export function GlanceShell() {
             {hasContext && !lastArtifactMsg && !lastAssistantMsg && !isStreaming ? (
               <motion.div
                 key="smart-crumbs"
-                layout
+
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -529,19 +582,14 @@ export function GlanceShell() {
             {lastArtifactMsg?.artifact ? (
               <motion.div
                 key={`artifact-${lastArtifactMsg.id}`}
-                layout
+
                 initial={{ opacity: 0, y: 10, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 6, scale: 0.97 }}
                 transition={SPRING}
                 className="w-full"
               >
-                <FloatingArtifact
-                  artifact={lastArtifactMsg.artifact}
-                  onClose={dismissArtifact}
-                  onFollowUp={followUp}
-                  onOpenChat={() => window.deepFocus?.history?.open?.()}
-                />
+                <FloatingArtifact artifact={lastArtifactMsg.artifact} />
                 <SuggestionRow
                   primary={suggestedAction}
                   alternatives={suggestedAlternatives}
@@ -551,10 +599,10 @@ export function GlanceShell() {
                   }
                 />
               </motion.div>
-            ) : lastAssistantMsg ? (
+            ) : lastAssistantMsg && lastAssistantMsg.content ? (
               <motion.div
                 key={`answer-${lastAssistantMsg.id}`}
-                layout
+
                 initial={{ opacity: 0, y: 10, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 6, scale: 0.97 }}
@@ -567,81 +615,50 @@ export function GlanceShell() {
                   onClose={dismissArtifact}
                 />
               </motion.div>
-            ) : isStreaming ? (
-              <motion.div
-                key="shimmer"
-                layout
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={SPRING}
-                className="w-full"
-              >
-                <StreamingShimmer />
-              </motion.div>
             ) : null}
           </AnimatePresence>
 
-          {/* Composer vs InlineThinking — single crossfade slot, shared
-              layout so they morph smoothly when a turn starts/ends. */}
-          <AnimatePresence mode="wait" initial={false}>
-            {isStreaming ? (
-              <motion.div
-                key="thinking"
-                layout
-                initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -4, scale: 0.98 }}
-                transition={SPRING}
-                className="w-full"
-              >
-                <InlineThinking
-                  chars={
-                    lastAssistantMsg?.content.length ??
-                    (artifactProgress > 0 ? artifactProgress : 0)
-                  }
-                  routing={lastRouting}
-                  onAbort={() => abortRef.current?.abort()}
-                />
-              </motion.div>
-            ) : (
-              <motion.div
-                key="composer"
-                layout
-                initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -4, scale: 0.98 }}
-                transition={SPRING}
-                className="w-full"
-              >
-                <FloatingComposer
-                  ref={inputRef}
-                  value={draft}
-                  onChange={setDraft}
-                  onSend={() => {
-                    const text = draft.trim();
-                    if (!text) return;
-                    void sendText(text);
-                  }}
-                  onMic={() => {
-                    /* TODO: wire ElevenLabs STT */
-                  }}
-                  placeholder={
-                    hasContext
-                      ? lastAssistantMsg
-                        ? "Ask a follow-up…"
-                        : "Ask anything about the attached context…"
-                      : mode === "region"
-                        ? "Ask about the captured region…"
-                        : "Ask anything…"
-                  }
-                  providerLabel={providerLabel}
-                  onClose={minimizeShell}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
+          {/* Composer is ALWAYS rendered in expanded mode. While a turn is
+              streaming, the input is disabled, the whole pill shows the
+              traveling emerald border, and the Send button morphs into Stop.
+              This is the entire "thinking" UX — no separate blob, no aurora. */}
+          <motion.div
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={SPRING}
+            className="w-full"
+          >
+            <FloatingComposer
+              ref={inputRef}
+              value={draft}
+              onChange={setDraft}
+              streaming={isStreaming}
+              onSend={() => {
+                const text = draft.trim();
+                if (!text) return;
+                void sendText(text);
+              }}
+              onStop={() => abortRef.current?.abort()}
+              onMic={() => {
+                /* TODO: wire ElevenLabs STT */
+              }}
+              onClearOutput={dismissArtifact}
+              hasOutput={!!lastArtifactMsg || !!lastAssistantMsg}
+              placeholder={
+                isStreaming
+                  ? "Thinking…"
+                  : hasContext
+                    ? lastAssistantMsg
+                      ? "Ask a follow-up…"
+                      : "Ask anything about the attached context…"
+                    : mode === "region"
+                      ? "Ask about the captured region…"
+                      : "Ask anything…"
+              }
+              providerLabel={providerLabel}
+            />
+          </motion.div>
+        </div>
       </LayoutGroup>
     </Stage>
   );
@@ -690,23 +707,31 @@ function Stage({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------
-// Drag grip — small handle users can grab to move the whole window.
+// TopBar — drag handle on the left, close (minimize) on the right. Always
+// visible while the shell is expanded so the user can grab or dismiss at
+// any time, including while a turn is streaming.
 // ---------------------------------------------------------------------
 
-function DragGrip() {
-  const handlers = useWindowDragHandlers();
+function TopBar({ onClose }: { onClose: () => void }) {
+  const dragHandlers = useWindowDragHandlers();
   return (
-    <div
-      title="Drag to move Glance"
-      className="slide-down glass flex h-5 w-14 cursor-grab items-center justify-center rounded-full active:cursor-grabbing"
-      {...handlers}
-    >
-      <div className="flex gap-0.5">
-        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
-        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
-        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
-        <span className="h-1 w-1 rounded-full bg-slate-400/70" />
-      </div>
+    <div className="flex items-center gap-1">
+      <button
+        title="Drag to move"
+        aria-label="Drag to move"
+        className="glass flex h-6 w-6 cursor-grab items-center justify-center rounded-full text-slate-400 hover:text-slate-100 active:cursor-grabbing"
+        {...dragHandlers}
+      >
+        <DragIcon />
+      </button>
+      <button
+        onClick={onClose}
+        title="Collapse (Esc)"
+        aria-label="Collapse"
+        className="glass flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-rose-500/20 hover:text-rose-100"
+      >
+        <CloseIcon />
+      </button>
     </div>
   );
 }
@@ -765,7 +790,6 @@ function DraggableOrb({ onClick }: { onClick: () => void }) {
   const handlers = useWindowDragHandlers(onClick);
   return (
     <motion.button
-      layoutId="glance-core"
       aria-label="Open Glance (drag to reposition)"
       title="Click to open · drag to move"
       className="orb"
@@ -825,8 +849,10 @@ function ContextChip({
 
 function NoticeBanner({
   notice,
+  onDismiss,
 }: {
   notice: NonNullable<PanelOpenPayload["notice"]>;
+  onDismiss?: () => void;
 }) {
   const tone = notice.tone ?? "warn";
   const palette =
@@ -860,6 +886,16 @@ function NoticeBanner({
           </button>
         ) : null}
       </div>
+      {onDismiss ? (
+        <button
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          title="Dismiss"
+          className="-mr-1 -mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-slate-400/80 transition hover:bg-white/10 hover:text-slate-100"
+        >
+          <CloseIcon />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -921,76 +957,34 @@ function FloatingAnswer({
   );
 }
 
-// ---------------------------------------------------------------------
-// InlineThinking — replaces the composer while a turn streams. A compact
-// pill with a swirling aurora bead + live token count + abort affordance.
-// Inspired by the ChatGPT voice-mode bloom but scaled for a 520px shell.
-// ---------------------------------------------------------------------
-
-function InlineThinking({
-  chars,
-  routing,
-  onAbort,
-}: {
-  chars: number;
-  routing: RoutingInfo | null;
-  onAbort: () => void;
-}) {
-  const label =
-    chars > 0 ? `${chars.toLocaleString()} chars` : "Listening to the model…";
-  // Pretty-print the chosen action so users can see the agent's decision
-  // land *before* the artifact does. "answer" is conversational; hide it.
-  const routedLabel =
-    routing && routing.action && routing.action !== "answer"
-      ? prettyActionId(routing.action)
-      : null;
-  return (
-    <div className="glass flex w-full items-center gap-3 rounded-[22px] px-3 py-2">
-      <motion.div
-        layoutId="glance-core"
-        className="aurora-bead"
-        aria-hidden
-        transition={SPRING}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 text-[12.5px] font-medium text-slate-100">
-          <span>Thinking</span>
-          <span className="glance-dots">
-            <span />
-            <span />
-            <span />
-          </span>
-          <AnimatePresence>
-            {routedLabel ? (
-              <motion.span
-                key={routedLabel}
-                initial={{ opacity: 0, x: -6, scale: 0.9 }}
-                animate={{ opacity: 1, x: 0, scale: 1 }}
-                exit={{ opacity: 0, x: -6, scale: 0.9 }}
-                transition={SPRING_SOFT}
-                className="ml-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-[1px] text-[10px] font-mono uppercase tracking-[0.12em] text-emerald-200"
-                title={routing?.reason ?? ""}
-              >
-                → {routedLabel}
-              </motion.span>
-            ) : null}
-          </AnimatePresence>
-        </div>
-        <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-slate-400">
-          {label}
-        </div>
-      </div>
-      <motion.button
-        onClick={onAbort}
-        className="ghost-btn shrink-0"
-        title="Abort (Esc)"
-        whileHover={{ scale: 1.04 }}
-        whileTap={{ scale: 0.94 }}
-      >
-        Stop
-      </motion.button>
-    </div>
-  );
+// Turn raw backend/fetch errors into something a human wants to read. Keeps
+// the original detail if we can't recognize it so debugging stays possible.
+function humanizeBackendError(raw: string): string {
+  const s = raw.trim();
+  if (!s) return "Unknown error.";
+  // `backend 400: {"detail":"action 'product' needs text context"}`
+  const m = /^backend\s+(\d{3}):\s*(.*)$/i.exec(s);
+  if (m) {
+    const status = Number(m[1]);
+    let detail = m[2]?.trim() ?? "";
+    try {
+      const parsed = JSON.parse(detail);
+      if (parsed && typeof parsed === "object" && typeof parsed.detail === "string") {
+        detail = parsed.detail;
+      }
+    } catch {
+      /* keep raw detail */
+    }
+    if (status === 400) return detail || "The backend rejected that request.";
+    if (status === 404) return "Backend endpoint not found. Is the API out of date?";
+    if (status === 429) return "Rate limited — wait a moment and try again.";
+    if (status >= 500) return detail || "Backend hit an internal error. Check the server logs.";
+    return detail || s;
+  }
+  if (/failed to fetch|network|ECONNREFUSED/i.test(s)) {
+    return "Couldn't reach the backend. Is `pnpm dev:backend` running?";
+  }
+  return s;
 }
 
 function prettyActionId(id: string): string {
@@ -1025,21 +1019,20 @@ function SuggestionRow({
   if (!items.length) return null;
   return (
     <motion.div
-      layout
       initial="hidden"
       animate="visible"
       variants={{
         hidden: {},
         visible: { transition: { staggerChildren: 0.04, delayChildren: 0.06 } },
       }}
-      className="mt-2 flex max-w-[520px] flex-wrap justify-end gap-1.5"
+      className="mt-3 flex max-w-[520px] flex-wrap items-center justify-end gap-1.5"
     >
       <motion.div
         variants={{
           hidden: { opacity: 0, y: 4 },
           visible: { opacity: 1, y: 0, transition: SPRING_SOFT },
         }}
-        className="mr-1 self-center font-mono text-[9.5px] uppercase tracking-[0.16em] text-slate-400"
+        className="mr-1 font-mono text-[9.5px] uppercase tracking-[0.16em] text-slate-400"
       >
         Try instead
       </motion.div>
@@ -1050,38 +1043,21 @@ function SuggestionRow({
             hidden: { opacity: 0, y: 6, scale: 0.94 },
             visible: { opacity: 1, y: 0, scale: 1, transition: SPRING },
           }}
-          whileHover={{ scale: 1.05, y: -1 }}
-          whileTap={{ scale: 0.95 }}
+          whileHover={{ scale: 1.03, y: -1 }}
+          whileTap={{ scale: 0.96 }}
           disabled={disabled}
           onClick={() => onPick(s.id, s.label)}
           title={s.reason ?? ""}
-          className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-[5px] text-[11px] text-emerald-100 transition hover:border-emerald-400/60 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          className="glass flex items-center gap-1.5 rounded-full px-3 py-[5px] text-[11px] text-emerald-200 ring-1 ring-emerald-400/40 transition hover:text-emerald-100 hover:ring-emerald-300/70 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {prettyActionId(s.label ?? s.id)}
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.8)]" />
+          <span className="font-medium">{prettyActionId(s.label ?? s.id)}</span>
           {s.reason ? (
-            <span className="ml-1.5 font-normal text-emerald-200/60">· {s.reason}</span>
+            <span className="max-w-[220px] truncate font-normal text-slate-300/80">· {s.reason}</span>
           ) : null}
         </motion.button>
       ))}
     </motion.div>
-  );
-}
-
-// ---------------------------------------------------------------------
-// StreamingShimmer — placeholder while we've kicked a turn off but haven't
-// received the first token yet. Three softly-pulsing bars; dies as soon as
-// FloatingAnswer has anything to show.
-// ---------------------------------------------------------------------
-
-function StreamingShimmer() {
-  return (
-    <div className="rise-in glass w-full max-w-[520px] rounded-[22px] px-4 py-3">
-      <div className="flex flex-col gap-2">
-        <div className="glance-shimmer h-3 w-5/6 rounded-md" />
-        <div className="glance-shimmer h-3 w-4/6 rounded-md" />
-        <div className="glance-shimmer h-3 w-3/6 rounded-md" />
-      </div>
-    </div>
   );
 }
 
@@ -1125,12 +1101,12 @@ function SmartCrumbs({
             hidden: { opacity: 0, y: 6, scale: 0.94 },
             visible: { opacity: 1, y: 0, scale: 1, transition: SPRING },
           }}
-          whileHover={{ scale: 1.06, y: -1 }}
+          whileHover={{ scale: 1.04, y: -1 }}
           whileTap={{ scale: 0.94 }}
           disabled={disabled}
           onClick={() => onPick(c.prompt)}
           title={c.prompt}
-          className="rounded-full border border-emerald-500/25 bg-emerald-500/5 px-3 py-[5px] text-[11.5px] text-emerald-100/90 transition hover:border-emerald-400/60 hover:bg-emerald-500/15 hover:text-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="glass rounded-full px-3 py-[5px] text-[11.5px] font-medium text-emerald-200 ring-1 ring-emerald-400/40 transition hover:text-emerald-100 hover:ring-emerald-300/70 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {c.label}
         </motion.button>
@@ -1214,26 +1190,56 @@ function buildSmartCrumbs({
 
 
 // ---------------------------------------------------------------------
-// Composer pill — mic + text + send
+// Composer pill — mic + text + [send|stop]. Streaming state = subtle
+// traveling border + Stop button in place of Send. No separate "thinking"
+// surface: this IS the thinking surface while a turn is in flight.
+//
+// The X button is context-aware:
+//   - draft non-empty  → clear the draft
+//   - draft empty + output on screen → clear the output (keep session)
+//   - neither          → hidden
+// Hard close (minimize to orb) lives in the TopBar, not here.
 // ---------------------------------------------------------------------
 
 type ComposerProps = {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
+  onStop: () => void;
   onMic: () => void;
+  onClearOutput: () => void;
+  hasOutput: boolean;
+  streaming: boolean;
   placeholder: string;
   providerLabel: string | null;
-  onClose: () => void;
 };
 
 const FloatingComposer = forwardRef<HTMLTextAreaElement, ComposerProps>(
   function FloatingComposer(
-    { value, onChange, onSend, onMic, placeholder, providerLabel, onClose },
+    {
+      value,
+      onChange,
+      onSend,
+      onStop,
+      onMic,
+      onClearOutput,
+      hasOutput,
+      streaming,
+      placeholder,
+      providerLabel,
+    },
     ref,
   ) {
+    const hasDraft = !!value.trim();
+    const showClear = hasDraft || hasOutput;
+
     return (
-      <div className="glass flex w-full items-end gap-1.5 rounded-[22px] pl-2 pr-1.5 py-1.5">
+      <div
+        className={
+          "glass flex w-full items-end gap-1.5 rounded-[22px] pl-2 pr-1.5 py-1.5 " +
+          (streaming ? "glance-streaming-border" : "")
+        }
+      >
         <motion.button
           onClick={onMic}
           aria-label="Voice input"
@@ -1248,15 +1254,16 @@ const FloatingComposer = forwardRef<HTMLTextAreaElement, ComposerProps>(
           ref={ref}
           value={value}
           rows={1}
+          disabled={streaming}
           onChange={(e) => onChange(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              onSend();
+              if (!streaming) onSend();
             }
           }}
           placeholder={placeholder}
-          className="max-h-32 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[14px] text-slate-100 outline-none placeholder:text-slate-500"
+          className="max-h-32 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[14px] text-slate-100 outline-none placeholder:text-slate-500 disabled:cursor-not-allowed disabled:text-slate-300/70"
         />
         <div className="flex flex-col items-end gap-0.5">
           {providerLabel ? (
@@ -1277,26 +1284,43 @@ const FloatingComposer = forwardRef<HTMLTextAreaElement, ComposerProps>(
             >
               <GearIcon />
             </motion.button>
-            <motion.button
-              onClick={onClose}
-              aria-label="Collapse"
-              whileHover={{ scale: 1.08 }}
-              whileTap={{ scale: 0.9 }}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-white/5 hover:text-slate-200"
-            >
-              <CloseIcon />
-            </motion.button>
-            <motion.button
-              onClick={onSend}
-              aria-label="Send"
-              disabled={!value.trim()}
-              whileHover={value.trim() ? { scale: 1.1, x: 1 } : undefined}
-              whileTap={value.trim() ? { scale: 0.9 } : undefined}
-              transition={SPRING_BOUNCY}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-slate-950 transition enabled:hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-slate-500"
-            >
-              <SendIcon />
-            </motion.button>
+            {showClear ? (
+              <motion.button
+                onClick={() => (hasDraft ? onChange("") : onClearOutput())}
+                aria-label={hasDraft ? "Clear text" : "Clear answer"}
+                title={hasDraft ? "Clear text" : "Clear answer"}
+                whileHover={{ scale: 1.08 }}
+                whileTap={{ scale: 0.9 }}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-white/10 hover:text-slate-100"
+              >
+                <CloseIcon />
+              </motion.button>
+            ) : null}
+            {streaming ? (
+              <motion.button
+                onClick={onStop}
+                aria-label="Stop"
+                title="Stop (Esc)"
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                transition={SPRING_BOUNCY}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-500/90 text-white transition hover:bg-rose-400"
+              >
+                <StopIcon />
+              </motion.button>
+            ) : (
+              <motion.button
+                onClick={onSend}
+                aria-label="Send"
+                disabled={!hasDraft}
+                whileHover={hasDraft ? { scale: 1.1, x: 1 } : undefined}
+                whileTap={hasDraft ? { scale: 0.9 } : undefined}
+                transition={SPRING_BOUNCY}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-slate-950 transition enabled:hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-slate-500"
+              >
+                <SendIcon />
+              </motion.button>
+            )}
           </div>
         </div>
       </div>

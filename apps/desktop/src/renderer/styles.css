@@ -355,36 +355,43 @@ body { background: transparent !important; }
 .glance-answer::-webkit-scrollbar { width: 6px; }
 .glance-answer::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 9999px; }
 
-/* Soft traveling emerald glow ringing the answer card while streaming. */
+/* Streaming state for the composer / answer card.
+ *
+ * Old version used a rotating conic-gradient ring with `transform: rotate`,
+ * which swept the corners of the (non-square) element across the viewport
+ * as diagonal streaks. Replaced with a simple in-place treatment:
+ *   - emerald border + breathing box-shadow glow (no rotation, no sweep).
+ *   - a thin bottom "scanline" that travels left→right, providing motion
+ *     without leaving the element's bounding box.
+ * Both animations are clipped by the element's border-radius. Nothing
+ * paints outside the pill.
+ */
+/* Siri-style thinking halo around the composer: a breathing multi-layer
+ * glow with a subtle hue shift between emerald and teal/cyan. No rotating
+ * conic gradients, no element-clipping scanline — just pure box-shadow so
+ * the glow bleeds outside the pill into the transparent stage halo, the
+ * way Siri's orb bleeds light around itself.
+ */
 .glance-streaming-border {
   position: relative;
-  isolation: isolate;
+  border: 1px solid rgba(16, 185, 129, 0.65);
+  animation: glance-streaming-halo 2.6s ease-in-out infinite;
 }
-.glance-streaming-border::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: conic-gradient(
-    from var(--angle, 0deg),
-    rgba(16, 185, 129, 0.85),
-    rgba(56, 189, 248, 0.55),
-    rgba(167, 139, 250, 0.55),
-    rgba(244, 114, 182, 0.45),
-    rgba(16, 185, 129, 0.85)
-  );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
-  animation: glance-spin-border 4s linear infinite;
-  pointer-events: none;
-  z-index: -1;
-  filter: blur(0.4px);
-}
-@property --angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
-@keyframes glance-spin-border {
-  to { --angle: 360deg; transform: rotate(360deg); }
+@keyframes glance-streaming-halo {
+  0%, 100% {
+    border-color: rgba(16, 185, 129, 0.55);
+    box-shadow:
+      0 0 0 1px rgba(16, 185, 129, 0.22),
+      0 0 22px 2px rgba(16, 185, 129, 0.42),
+      0 0 48px 6px rgba(16, 185, 129, 0.18);
+  }
+  50% {
+    border-color: rgba(45, 212, 191, 0.85);
+    box-shadow:
+      0 0 0 1px rgba(45, 212, 191, 0.45),
+      0 0 34px 4px rgba(45, 212, 191, 0.6),
+      0 0 72px 12px rgba(16, 185, 129, 0.35);
+  }
 }
 
 /* Blinking caret at the tail of streaming text. */
@@ -441,50 +448,5 @@ body { background: transparent !important; }
   100% { background-position: -10% 0; }
 }
 
-/* Aurora bead — a tiny ChatGPT-voice-mode-style glowing sphere that lives
-   inside the inline thinking pill. 28px orb with a spinning multi-hue
-   halo and a gentle breathing scale, sized to feel alive but not dominant. */
-.aurora-bead {
-  position: relative;
-  width: 30px;
-  height: 30px;
-  border-radius: 9999px;
-  overflow: hidden;
-  flex: none;
-  background: radial-gradient(circle at 50% 45%, rgba(16, 185, 129, 0.65), rgba(2, 6, 23, 0.9) 72%);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.08),
-    0 4px 16px -2px rgba(16, 185, 129, 0.55),
-    0 0 14px 2px rgba(56, 189, 248, 0.28);
-  animation: aurora-breathe 2.6s ease-in-out infinite;
-}
-.aurora-bead::before,
-.aurora-bead::after {
-  content: "";
-  position: absolute;
-  inset: -40%;
-  border-radius: 9999px;
-  filter: blur(10px);
-  mix-blend-mode: screen;
-}
-.aurora-bead::before {
-  background: conic-gradient(from 0deg, #10b981, #38bdf8, #a78bfa, #f472b6, #10b981);
-  animation: aurora-spin 3s linear infinite;
-  opacity: 0.95;
-}
-.aurora-bead::after {
-  background:
-    radial-gradient(circle at 30% 30%, #34d399 0%, rgba(52, 211, 153, 0) 55%),
-    radial-gradient(circle at 70% 70%, #a78bfa 0%, rgba(167, 139, 250, 0) 55%),
-    radial-gradient(circle at 40% 80%, #38bdf8 0%, rgba(56, 189, 248, 0) 55%);
-  animation: aurora-pulse 2.1s ease-in-out infinite;
-}
-@keyframes aurora-spin   { to { transform: rotate(360deg); } }
-@keyframes aurora-pulse  {
-  0%, 100% { transform: scale(0.9)  translate(0, 0); opacity: 0.9; }
-  50%      { transform: scale(1.18) translate(1px, -1px); opacity: 1; }
-}
-@keyframes aurora-breathe {
-  0%, 100% { transform: scale(1);    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 4px 16px -2px rgba(16,185,129,0.55), 0 0 14px 2px rgba(56,189,248,0.28); }
-  50%      { transform: scale(1.06); box-shadow: 0 0 0 1px rgba(255,255,255,0.10), 0 6px 20px -2px rgba(16,185,129,0.70), 0 0 22px 3px rgba(167,139,250,0.35); }
-}
+/* (aurora-bead removed — was only used by the deleted InlineThinking pill
+   and its rotating transforms were causing ghost streaks during HMR.) */

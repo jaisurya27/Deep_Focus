@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { motion } from "framer-motion";
+import { useState, type ReactNode } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 
 import type { Artifact } from "../../shared/artifacts";
 import { ArtifactCard } from "../artifacts/ArtifactCard";
@@ -22,11 +22,33 @@ type Props = {
 const SPRING = { type: "spring", stiffness: 420, damping: 36, mass: 0.9 } as const;
 
 /**
- * A chromeless floating artifact. The artifact content itself is rendered
- * raw — no card, no border — and a floating action bar sits below it with
- * staggered entrance + spring hover/tap.
+ * Just the artifact body (the card itself). The action rail lives in the
+ * shell's TopBar so drag/close + copy/follow-up/dismiss all share a single
+ * horizontal row above the output.
  */
-export function FloatingArtifact({
+export function FloatingArtifact({ artifact }: { artifact: Artifact }) {
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 4, scale: 0.98 }}
+      transition={SPRING}
+      className="max-h-[60vh] w-full overflow-y-auto stage-scroll px-1"
+    >
+      <ArtifactCard artifact={artifact} />
+    </motion.div>
+  );
+}
+
+/**
+ * Compact icon-only rail of artifact actions: Copy / Redo? / Follow-up /
+ * Full chat? / Dismiss. Rendered by the shell inside the TopBar row, so it
+ * sits on the same line as the drag + close buttons, floating above the
+ * artifact body. Each button is a 24px glass pill; hover/focus springs in
+ * the label and expands the pill's width.
+ */
+export function ArtifactActionRail({
   artifact,
   onClose,
   onFollowUp,
@@ -34,87 +56,91 @@ export function FloatingArtifact({
   onOpenChat,
 }: Props) {
   return (
-    <div className="flex w-full flex-col items-end gap-2">
-      <motion.div
-        layout
-        initial={{ opacity: 0, y: 8, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 4, scale: 0.98 }}
-        transition={SPRING}
-        className="max-h-[60vh] w-full overflow-y-auto stage-scroll px-1"
-      >
-        <ArtifactCard artifact={artifact} />
-      </motion.div>
-
-      <motion.div
-        initial="hidden"
-        animate="visible"
-        variants={{
-          hidden: {},
-          visible: { transition: { staggerChildren: 0.045, delayChildren: 0.08 } },
-        }}
-        className="flex flex-wrap items-center justify-end gap-1.5"
-      >
-        <ActionButton
-          onClick={() => copyArtifact(artifact)}
-          icon={<CopyIcon />}
-          label="Copy"
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: -4, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={SPRING}
+      className="flex items-center gap-1"
+    >
+      <IconAction
+        onClick={() => copyArtifact(artifact)}
+        icon={<CopyIcon />}
+        label="Copy"
+      />
+      {onRedo ? (
+        <IconAction onClick={onRedo} icon={<RedoIcon />} label="Redo" />
+      ) : null}
+      <IconAction
+        onClick={onFollowUp}
+        icon={<FollowUpIcon />}
+        label="Follow-up"
+      />
+      {onOpenChat ? (
+        <IconAction
+          onClick={onOpenChat}
+          icon={<ChatIcon />}
+          label="Full chat"
         />
-        {onRedo ? (
-          <ActionButton onClick={onRedo} icon={<RedoIcon />} label="Redo" />
-        ) : null}
-        <ActionButton
-          onClick={onFollowUp}
-          icon={<FollowUpIcon />}
-          label="Ask follow-up"
-        />
-        {onOpenChat ? (
-          <ActionButton
-            onClick={onOpenChat}
-            icon={<ChatIcon />}
-            label="Full chat"
-          />
-        ) : null}
-        <ActionButton
-          onClick={onClose}
-          icon={<CloseIcon />}
-          label="Dismiss"
-          variant="danger"
-        />
-      </motion.div>
-    </div>
+      ) : null}
+      <IconAction
+        onClick={onClose}
+        icon={<CloseIcon />}
+        label="Dismiss"
+        tone="danger"
+      />
+    </motion.div>
   );
 }
 
-function ActionButton({
+/**
+ * Icon-first glass button. 24px round by default; on hover/focus the label
+ * slides in and the button expands with a spring. Sized to match the
+ * shell's other top-row affordances exactly.
+ */
+function IconAction({
   onClick,
   icon,
   label,
-  variant,
+  tone = "default",
 }: {
   onClick: () => void;
   icon: ReactNode;
   label: string;
-  variant?: "default" | "danger" | "primary";
+  tone?: "default" | "danger";
 }) {
-  const cls =
-    "ghost-btn" +
-    (variant === "danger" ? " danger" : variant === "primary" ? " primary" : "");
+  const [hover, setHover] = useState(false);
+  const hoverCls =
+    tone === "danger" ? "hover:text-rose-200" : "hover:text-emerald-200";
   return (
     <motion.button
-      variants={{
-        hidden: { opacity: 0, y: 8, scale: 0.92 },
-        visible: { opacity: 1, y: 0, scale: 1, transition: SPRING },
-      }}
-      whileHover={{ scale: 1.05, y: -1 }}
-      whileTap={{ scale: 0.94 }}
+      layout
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
       onClick={onClick}
-      className={cls}
+      whileTap={{ scale: 0.92 }}
+      transition={SPRING}
+      aria-label={label}
+      title={label}
+      className={`glass flex h-6 items-center gap-1 rounded-full px-1.5 text-slate-300 transition-colors ${hoverCls}`}
     >
-      <span className="opacity-80">{icon}</span>
-      <span className="text-[11px] font-medium uppercase tracking-wider">
-        {label}
-      </span>
+      <span className="flex h-3 w-3 items-center justify-center">{icon}</span>
+      <AnimatePresence initial={false}>
+        {hover ? (
+          <motion.span
+            key="label"
+            initial={{ opacity: 0, width: 0, marginLeft: -2, marginRight: -2 }}
+            animate={{ opacity: 1, width: "auto", marginLeft: 0, marginRight: 2 }}
+            exit={{ opacity: 0, width: 0, marginLeft: -2, marginRight: -2 }}
+            transition={{ type: "spring", stiffness: 500, damping: 34 }}
+            className="overflow-hidden whitespace-nowrap text-[9.5px] font-medium uppercase tracking-wider"
+          >
+            {label}
+          </motion.span>
+        ) : null}
+      </AnimatePresence>
     </motion.button>
   );
 }

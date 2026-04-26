@@ -77,15 +77,20 @@ function AnswerCard({ a }: { a: AnswerArtifact }) {
         </div>
       ) : null}
       {a.followups?.length ? (
-        <div className="mt-1 flex flex-wrap gap-1.5">
-          {a.followups.map((f, i) => (
-            <span
-              key={i}
-              className="rounded-full border border-slate-700/70 bg-slate-900/50 px-2.5 py-[3px] text-[11px] text-slate-300"
-            >
-              {f}
-            </span>
-          ))}
+        <div className="mt-1 flex flex-col gap-1.5">
+          <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-slate-400">
+            You might ask
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {a.followups.map((f, i) => (
+              <span
+                key={i}
+                className="rounded-full border border-slate-600/60 bg-slate-900/70 px-2.5 py-[3px] text-[11px] text-slate-200"
+              >
+                {f}
+              </span>
+            ))}
+          </div>
         </div>
       ) : null}
     </Card>
@@ -107,10 +112,12 @@ function Card({
   children: React.ReactNode;
   actions?: React.ReactNode;
 }) {
-  // Glance: artifacts float chromeless. Only a whisper-quiet label remains
-  // above the content; the FloatingArtifact shell provides action buttons.
+  // Every artifact gets an opaque acrylic panel so the content stays
+  // readable on ANY desktop background (white Chrome tab, Figma canvas,
+  // photo wallpaper, etc.). The shell's transparent Electron window would
+  // otherwise let the desktop bleed right through the artifact text.
   return (
-    <div className="flex flex-col gap-3 text-slate-100">
+    <div className="glass flex flex-col gap-3 rounded-[22px] px-4 py-3 text-slate-100">
       {(title || subtitle || actions) && (
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
