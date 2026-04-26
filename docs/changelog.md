@@ -4,6 +4,87 @@ Chronological record of changes on top of the `Refactor: Deep Focus → Glance`
 commit (110830b). When the branch ships, squash or re-organize into a proper
 changelog.
 
+## 2026-04-25 — FET payment gate for restaurant booking
+
+`restaurant_booking` artifacts in the desktop app are now payment-gated before
+the restaurant card is revealed, mirroring the Orchestrator's Payment Protocol
+flow on ASI:One.
+
+**Flow:** user asks → backend streams `restaurant_booking` artifact → GlanceShell
+intercepts it → `FetPaymentGate` modal appears (0.10 FET, Fetch.ai branding) →
+user clicks "Pay 0.10 FET" → 1.8s simulated testnet confirmation → success flash
+→ restaurant card revealed. "Decline" dismisses the artifact entirely.
+
+**New file:** `apps/desktop/src/renderer/shell/FetPaymentGate.tsx`
+
+**Changed:** `GlanceShell.tsx` — added `paidMessageIds` state; artifact render
+block conditionally shows `FetPaymentGate` before `FloatingArtifact` for
+`restaurant_booking` until payment is confirmed.
+
+## 2026-04-25 — Agentverse bridge: desktop artifacts route through Fetch.ai
+
+`food_order`, `restaurant_booking`, and `fix_code` in the desktop app now
+delegate to the Fetch.ai Agentverse bridge (`:8020`) instead of calling the
+local LLM directly. The bridge uses the same system prompts and formatters as
+the Agentverse specialist agents (DiscoverAgent / ConnectAgent / CodeAgent).
+
+**New files:**
+- `services/agentverse/bridge.py` — FastAPI HTTP bridge (port 8020), started
+  by `run_all.py` alongside the agents.
+
+**Changed files:**
+- `services/agentverse/shared/config.py` — added `BRIDGE_PORT = 8020`.
+- `services/agentverse/requirements.txt` — added `fastapi`, `uvicorn`.
+- `services/agentverse/run_all.py` — Bridge is started first (agents depend on it being up).
+- `services/backend/app/config.py` — added `agentverse_bridge_url` setting
+  (env: `AGENTVERSE_BRIDGE_URL`, default `http://127.0.0.1:8020`).
+- `services/backend/app/routes/artifact.py` — added `_AGENTVERSE_ACTIONS` set
+  and `_agentverse_stream` coroutine; non-mock requests for those three actions
+  delegate to the bridge. If the bridge is unreachable the stream emits a clear
+  error message instead of silently failing.
+- `services/backend/app/artifacts.py` — `food_order` changed to
+  `needs_image=False` so text-only queries ("I want ramen tonight") work.
+
+**SSE meta badge:** delegated artifacts report `provider=fetch_ai / model=agentverse`.
+
+## 2026-04-25 — Fetch.ai Agentverse integration
+
+Added `services/agentverse/` — a standalone multi-agent system that exposes
+three Glance artifacts on Fetch.ai Agentverse, accessible via ASI:One Chat
+with no custom frontend required.
+
+**Agents (all in `services/agentverse/agents/`):**
+- `GlanceOrchestratorAgent` (port 8010) — Chat Protocol + Payment Protocol
+  (seller role). Classifies intent via keyword heuristics + LLM, routes to
+  the appropriate specialist. Connect-tier requests (restaurant booking) are
+  gated by a 0.10 FET payment via RequestPayment before dispatch.
+- `GlanceCodeAgent` (port 8011) — `fix_code` artifact. Accepts both
+  RoutedRequest (from Orchestrator) and direct ChatMessage from ASI:One.
+- `GlanceDiscoverAgent` (port 8012) — `food_order` artifact. Same dual path.
+- `GlanceConnectAgent` (port 8013) — `restaurant_booking` artifact.
+  Internal only (no Chat Protocol) — only reachable after payment cleared.
+
+**Artifacts implemented:**
+- `fix_code` — diagnose + corrected snippet with changes list
+- `food_order` — recipe, steps, DoorDash/Uber Eats/Grubhub links
+- `restaurant_booking` — booking card + OpenTable URL, gated by 0.10 FET
+
+**Shared modules (`services/agentverse/shared/`):**
+- `config.py` — fixed seeds → deterministic addresses; ports
+- `messages.py` — `RoutedRequest` / `RoutedResponse` inter-agent models
+- `system_prompts.py` — same JSON contracts as `services/backend/app/artifacts.py`
+- `llm.py` — async OpenAI/xAI call with JSON-mode + keyword-based classifier
+- `formatters.py` — converts artifact dicts to readable Markdown for ASI:One
+
+**To run:** see `docs/runbook.md` → Agentverse section.
+
+**Files added:**
+- `services/agentverse/requirements.txt`
+- `services/agentverse/.env.example`
+- `services/agentverse/shared/{__init__,config,messages,system_prompts,llm,formatters}.py`
+- `services/agentverse/agents/{__init__,orchestrator,code_agent,discover_agent,connect_agent}.py`
+- `services/agentverse/run_all.py`
+
 ## 2026-04-25 — Image-only capture auto-submit
 
 Region captures (Cmd+Ctrl+S) now auto-submit to `/artifact` immediately after

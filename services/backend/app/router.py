@@ -84,6 +84,8 @@ def _router_system_prompt(catalog: list[dict]) -> str:
         "  conversation, pick `answer` and produce prose.\n"
         "- `alternatives` should list up to 2 other plausible actions so the "
         "  UI can offer 'try this instead' chips.\n"
+        "- If the user mentions food, a dish, eating, ordering delivery, or a "
+        "  restaurant, pick `food_order` or `restaurant_booking`.\n"
         "- Respect the user's explicit instruction if present; never override "
         "  a clear 'translate this' with something else.\n\n"
         "Respond with a SINGLE JSON object, no prose, no fences, shape:\n"
@@ -98,6 +100,7 @@ async def route_action(
     image_data_url: str | None,
     user_instruction: str | None,
     window_context: dict | None,
+    history: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Return `{action, alternatives, reason}` for the given context."""
     catalog = _catalog_for_prompt(has_image=has_image)
@@ -136,6 +139,8 @@ async def route_action(
             allowed_ids={c["id"] for c in catalog},
         )
 
+    prior_turns = history or []
+
     if has_image:
         provider = get_vision_provider()
         streamer = getattr(provider, "chat_stream_multimodal_json", None)
@@ -143,6 +148,7 @@ async def route_action(
             return await _heuristic()
         wire = [
             {"role": "system", "content": sys_prompt},
+            *prior_turns,
             {
                 "role": "user",
                 "content": [
@@ -158,6 +164,7 @@ async def route_action(
             return await _heuristic()
         wire = [
             {"role": "system", "content": sys_prompt},
+            *prior_turns,
             {"role": "user", "content": user_payload},
         ]
 
@@ -217,6 +224,32 @@ _NON_ENGLISH_RE = re.compile(
 _CODEY_APPS = re.compile(
     r"code|xcode|terminal|iterm|intellij|pycharm|webstorm|vim|nvim|sublime", re.I
 )
+_FOOD_RE = re.compile(
+    r"\b(burger|pizza|sushi|ramen|tacos?|pasta|burrito|sandwich|salad|curry|"
+    r"noodle|pho|dumpling|wings|fries|steak|seafood|vegan|vegetarian|"
+    r"food|eat|hungry|order|delivery|takeout|take.?out|"
+    r"restaurant|cafe|diner|bistro|eatery|"
+    r"lunch|dinner|breakfast|brunch|snack|meal|dish|cuisine|"
+    r"doordash|uber\s*eats|grubhub|instacart|near\s+(me|ucla|downtown|here))\b",
+    re.I
+)
+_BOOK_RE = re.compile(
+    r"\b(book|reserv|table\s+for|seat|reservation|dine\s+in|sit.?down)\b", re.I
+)
+_PRICE_COMPARE_RE = re.compile(
+    r"\b(compare\s+price|price\s+check|how\s+much\s+(is|does|cost)|best\s+(price|deal)|"
+    r"cheapest|find.*(deal|price)|price\s+comparison|vs\s+amazon|check.*amazon)\b", re.I
+)
+_PRICE_MONITOR_RE = re.compile(
+    r"\b(monitor|watch|track|alert\s+me|notify\s+me|tell\s+me\s+when).{0,30}"
+    r"(price|drops?|below|under|cheaper)\b", re.I
+)
+_DEBATE_RE = re.compile(
+    r"\b(should\s+i|is\s+it\s+worth|pros?\s+and\s+cons?|worth\s+(it|buying|getting)|"
+    r"debate|argue|for\s+and\s+against|buy\s+vs|rent\s+vs|good\s+idea|bad\s+idea|"
+    r"thoughts\s+on|what\s+do\s+you\s+think\s+about|is\s+.{1,30}\s+(good|bad|worth))\b",
+    re.I
+)
 # "what am I looking at", "describe my screen", "read this", "what's on the
 # screen right now" — user is clearly asking about visible content but we
 # don't have an image yet. The router emits `needs_context` so the client
@@ -270,6 +303,16 @@ def _heuristic_route(
         )
 
     # Explicit user instruction wins.
+    if _PRICE_MONITOR_RE.search(instr):
+        return pick("price_monitor", ["price_comparison"], "Price monitoring intent.")
+    if _DEBATE_RE.search(instr):
+        return pick("debate", ["answer"], "Debate/decision intent.")
+    if _PRICE_COMPARE_RE.search(instr) or _PRICE_COMPARE_RE.search(body):
+        return pick("price_comparison", ["product", "shopping"], "Price comparison intent.")
+    if _BOOK_RE.search(instr):
+        return pick("restaurant_booking", ["food_order"], "Booking/reservation intent.")
+    if _FOOD_RE.search(instr) or _FOOD_RE.search(body):
+        return pick("food_order", ["recipe", "restaurant_booking"], "Food/order intent.")
     if "translate" in instr:
         return pick("translate", ["answer"], "User asked to translate.")
     if "rewrite" in instr or "rephrase" in instr:

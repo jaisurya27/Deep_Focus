@@ -598,7 +598,7 @@ ACTIONS: dict[str, ActionSpec] = {
         label="Food & Order",
         blurb="Recipe + order via DoorDash / Uber Eats when food is circled or described.",
         needs_text=False,
-        needs_image=True,
+        needs_image=False,
         system_prompt=_json_contract(
             """{
   "kind": "food_order",
@@ -721,36 +721,71 @@ ACTIONS: dict[str, ActionSpec] = {
         id="restaurant_booking",
         category="connect",
         label="Book table",
-        blurb="Restaurant info + book a reservation via OpenTable.",
+        blurb="3 restaurant options + reserve via OpenTable (0.10 FET).",
         system_prompt=_json_contract(
             """{
   "kind": "restaurant_booking",
-  "name": "Restaurant name",
-  "cuisine": "Cuisine type",
-  "address": "Full address",
-  "rating": 4.5,
-  "price_level": "$ | $$ | $$$ | $$$$",
-  "description": "One-sentence about the restaurant",
-  "opentable_query": "restaurant name city",
-  "opentable_url": "https://www.opentable.com/s/?term=RESTAURANT+CITY",
-  "phone": "+1 xxx-xxx-xxxx or null",
-  "map_query": "restaurant name address",
-  "hours": "Mon-Sun hours string or null"
-}"""
+  "restaurants": [
+    {
+      "name": "Restaurant name",
+      "cuisine": "Cuisine type",
+      "address": "Full address (city at minimum)",
+      "rating": 4.5,
+      "price_level": "$ | $$ | $$$ | $$$$",
+      "description": "One sentence about why this place stands out",
+      "opentable_query": "restaurant name city",
+      "opentable_url": "https://www.opentable.com/s/?term=RESTAURANT+CITY",
+      "phone": "+1 xxx-xxx-xxxx or null",
+      "map_query": "restaurant name address for Google Maps",
+      "hours": "hours string or null"
+    }
+  ]
+}
+Return exactly 3 distinct restaurants that match the request, ordered best-first."""
         ),
         mock=lambda t: {
             "kind": "restaurant_booking",
-            "name": t or "[mock] Nobu Los Angeles",
-            "cuisine": "Japanese",
-            "address": "903 N La Cienega Blvd, Los Angeles, CA 90069",
-            "rating": 4.7,
-            "price_level": "$$$$",
-            "description": "Celebrity chef Nobu Matsuhisa's flagship LA restaurant, famous for black cod miso.",
-            "opentable_query": t or "Nobu Los Angeles",
-            "opentable_url": "https://www.opentable.com/s/?term=Nobu+Los+Angeles",
-            "phone": "+1 310-657-5711",
-            "map_query": t or "Nobu Restaurant Los Angeles",
-            "hours": "Mon–Sun: 5:30pm – 10:30pm",
+            "restaurants": [
+                {
+                    "name": "[mock] Nobu Los Angeles",
+                    "cuisine": "Japanese",
+                    "address": "903 N La Cienega Blvd, Los Angeles, CA 90069",
+                    "rating": 4.7,
+                    "price_level": "$$$$",
+                    "description": "Nobu Matsuhisa's flagship LA restaurant, famous for black cod miso.",
+                    "opentable_query": "Nobu Los Angeles",
+                    "opentable_url": "https://www.opentable.com/s/?term=Nobu+Los+Angeles",
+                    "phone": "+1 310-657-5711",
+                    "map_query": "Nobu Restaurant Los Angeles",
+                    "hours": "Mon–Sun: 5:30pm–10:30pm",
+                },
+                {
+                    "name": "[mock] Sushi Gen",
+                    "cuisine": "Japanese/Sushi",
+                    "address": "422 E 2nd St, Los Angeles, CA 90012",
+                    "rating": 4.5,
+                    "price_level": "$$$",
+                    "description": "A downtown LA institution known for pristine sashimi at honest prices.",
+                    "opentable_query": "Sushi Gen Los Angeles",
+                    "opentable_url": "https://www.opentable.com/s/?term=Sushi+Gen+Los+Angeles",
+                    "phone": "+1 213-617-0552",
+                    "map_query": "Sushi Gen Los Angeles",
+                    "hours": "Mon–Sat: 11:30am–2pm, 5:30pm–9:30pm",
+                },
+                {
+                    "name": "[mock] Otium",
+                    "cuisine": "American/Modern",
+                    "address": "222 S Hope St, Los Angeles, CA 90012",
+                    "rating": 4.3,
+                    "price_level": "$$$",
+                    "description": "Contemporary American cuisine next to The Broad museum with a stunning patio.",
+                    "opentable_query": "Otium Los Angeles",
+                    "opentable_url": "https://www.opentable.com/s/?term=Otium+Los+Angeles",
+                    "phone": "+1 213-935-8500",
+                    "map_query": "Otium Restaurant Los Angeles",
+                    "hours": "Tue–Sun: 11:30am–10pm",
+                },
+            ],
         },
     ),
     "flight_track": ActionSpec(
@@ -893,6 +928,132 @@ ACTIONS: dict[str, ActionSpec] = {
             ],
             "instacart_query": t or "chocolate lava cake ingredients",
             "walmart_grocery_query": t or "chocolate lava cake ingredients",
+        },
+    ),
+    "price_comparison": ActionSpec(
+        id="price_comparison",
+        category="discover",
+        label="Compare prices",
+        blurb="Circle a product — 3 Fetch.ai agents check Amazon, Reddit, and Google Shopping in parallel.",
+        needs_image=False,
+        needs_text=False,
+        system_prompt="",  # handled entirely by the Agentverse bridge
+        mock=lambda t: {
+            "kind": "price_comparison",
+            "product": t or "[mock] Sony WH-1000XM5",
+            "fetch_parallel_ms": 612,
+            "sources": [
+                {
+                    "platform": "Amazon",
+                    "product": t or "Sony WH-1000XM5",
+                    "price": "$279.99",
+                    "rating": 4.7,
+                    "review_count": 28431,
+                    "prime": True,
+                    "delivery": "FREE delivery tomorrow",
+                    "seller": "Sold by Amazon",
+                    "url": "https://www.amazon.com/s?k=Sony+WH-1000XM5",
+                    "verdict": "Best value with Prime",
+                    "highlights": ["Prime eligible", "30-day return", "1-year warranty"],
+                },
+                {
+                    "platform": "Reddit",
+                    "product": t or "Sony WH-1000XM5",
+                    "sentiment": "positive",
+                    "score": 0.89,
+                    "summary": "Community consistently rates these the best ANC headphones under $300. Battery life and noise cancellation praised universally.",
+                    "top_comment": "Bought these last year, still the best purchase I've made. ANC is insane.",
+                    "concerns": ["USB-C flap can loosen over time", "No IP rating"],
+                    "subreddits": ["r/headphones", "r/BuyItForLife", "r/SonyHeadphones"],
+                    "url": "https://www.reddit.com/search/?q=Sony+WH-1000XM5+review&sort=top",
+                },
+                {
+                    "platform": "Google Shopping",
+                    "product": t or "Sony WH-1000XM5",
+                    "price": "$279.99",
+                    "lowest_price": "$249.00",
+                    "lowest_seller": "B&H Photo",
+                    "typical_range": "$249 – $350",
+                    "in_stock": True,
+                    "price_trend": "falling",
+                    "url": "https://www.google.com/search?tbm=shop&q=Sony+WH-1000XM5",
+                    "tip": "Price has dropped 12% over the past month — good time to buy.",
+                },
+            ],
+        },
+    ),
+    "debate": ActionSpec(
+        id="debate",
+        category="understand",
+        label="Debate",
+        blurb="Two Fetch.ai agents argue for and against, a third synthesises the verdict.",
+        needs_image=False,
+        needs_text=False,
+        system_prompt="",  # handled by bridge /debate
+        mock=lambda t: {
+            "kind": "debate",
+            "topic": t or "[mock] Should I switch to a standing desk?",
+            "fetch_agents": 3,
+            "fetch_parallel_ms": 834,
+            "total_paid_fet": 0.03,
+            "agent_payments": [
+                {"from": "GlanceOrchestrator", "to": "GlanceOptimistAgent", "amount": 0.01, "currency": "FET"},
+                {"from": "GlanceOrchestrator", "to": "GlancePessimistAgent", "amount": 0.01, "currency": "FET"},
+                {"from": "GlanceOrchestrator", "to": "GlanceSynthesisAgent", "amount": 0.01, "currency": "FET"},
+            ],
+            "pro": {
+                "agent": "GlanceOptimistAgent",
+                "stance": "Yes — invest in your health",
+                "confidence": 78,
+                "arguments": [
+                    "Reduces lower-back pain in 80% of users within 4 weeks",
+                    "Increases afternoon energy and focus",
+                    "Long-term healthcare savings outweigh the cost",
+                ],
+                "key_quote": "Sitting is the new smoking — standing desks are preventive medicine.",
+            },
+            "con": {
+                "agent": "GlancePessimistAgent",
+                "stance": "Not without proper ergonomics",
+                "confidence": 65,
+                "arguments": [
+                    "Standing all day causes varicose veins and foot pain",
+                    "Most people revert to sitting within 3 months",
+                    "A good chair + movement breaks is cheaper and more effective",
+                ],
+                "key_quote": "The desk won't save you if you don't move — habits matter more than furniture.",
+            },
+            "synthesis": {
+                "agent": "GlanceSynthesisAgent",
+                "verdict": "Sit-stand, not stand",
+                "lean": "pro",
+                "recommendation": (
+                    "A height-adjustable desk with a 60/40 sit-stand split is optimal. "
+                    "Pair it with an anti-fatigue mat and a timer to alternate every 45 minutes. "
+                    "Budget desks ($300–500) deliver most of the benefit — premium models add little."
+                ),
+                "factors": [
+                    "Current back pain level",
+                    "Willingness to build a routine",
+                    "Budget vs. quality trade-off",
+                ],
+            },
+        },
+    ),
+    "price_monitor": ActionSpec(
+        id="price_monitor",
+        category="connect",
+        label="Watch price",
+        blurb="Autonomous Fetch.ai agent monitors a product and alerts you when the price drops.",
+        needs_image=False,
+        needs_text=False,
+        system_prompt="",  # handled entirely by the Agentverse bridge
+        mock=lambda t: {
+            "kind": "price_monitor",
+            "product": t or "[mock] Sony WH-1000XM5",
+            "target_price": 249.00,
+            "monitor_id": "demo1234",
+            "status": "watching",
         },
     ),
 }

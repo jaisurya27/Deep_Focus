@@ -1,8 +1,17 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 
 import type {
+  AgentPayment,
   AnswerArtifact,
   Artifact,
+  DebateArtifact,
+  DebateSide,
+  DebateSynthesis,
+  PriceComparisonArtifact,
+  PriceMonitorArtifact,
+  PriceSource,
+  RestaurantOption,
   CritiqueUiArtifact,
   DiagnoseErrorArtifact,
   DiagramMermaidArtifact,
@@ -93,6 +102,12 @@ export function ArtifactCard({ artifact }: { artifact: Artifact }) {
       return <JobApplyCard a={artifact as JobApplyArtifact} />;
     case "grocery_list":
       return <GroceryListCard a={artifact as GroceryListArtifact} />;
+    case "price_comparison":
+      return <PriceComparisonCard a={artifact as PriceComparisonArtifact} />;
+    case "price_monitor":
+      return <PriceMonitorCard a={artifact as PriceMonitorArtifact} />;
+    case "debate":
+      return <DebateCard a={artifact as DebateArtifact} />;
     default:
       return <GenericCard a={artifact as GenericArtifact} />;
   }
@@ -1099,80 +1114,270 @@ function WeatherCard({ a }: { a: WeatherArtifact }) {
 
 // --- Restaurant booking --------------------------------------------------
 
-function StarRating({ rating }: { rating?: number }) {
+function StarRating({ rating, size = "md" }: { rating?: number; size?: "sm" | "md" }) {
   if (rating == null) return null;
   const full = Math.floor(rating);
   const half = rating - full >= 0.5;
+  const starClass = size === "sm" ? "text-[10px]" : "text-[12px]";
+  const numClass = size === "sm" ? "text-[10px]" : "text-[11px]";
   return (
-    <span className="flex items-center gap-0.5 text-[12px]">
+    <span className={`flex items-center gap-0.5 ${starClass}`}>
       {Array.from({ length: 5 }).map((_, i) => (
         <span key={i} className={i < full ? "text-amber-400" : half && i === full ? "text-amber-400/60" : "text-slate-700"}>
           ★
         </span>
       ))}
-      <span className="ml-1 font-mono text-[11px] text-slate-400">{rating.toFixed(1)}</span>
+      <span className={`ml-1 font-mono ${numClass} text-slate-400`}>{rating.toFixed(1)}</span>
     </span>
   );
 }
 
+type BookingPhase = "idle" | "paying" | "processing" | "confirmed" | "booked";
+
 function RestaurantBookingCard({ a }: { a: RestaurantBookingArtifact }) {
-  const openTableUrl = a.opentable_url
-    ?? `https://www.opentable.com/s/?term=${encodeURIComponent(a.opentable_query ?? a.name ?? "")}`;
-  const mapsUrl = googleMapsUrl(a.map_query ?? a.name ?? "");
-  const phoneUrl = a.phone ? `tel:${a.phone.replace(/\s/g, "")}` : null;
+  // Support both new `restaurants[]` array and legacy single-restaurant fields.
+  const options: RestaurantOption[] = a.restaurants?.length
+    ? a.restaurants
+    : a.name
+      ? [{ name: a.name, cuisine: a.cuisine, address: a.address, rating: a.rating,
+           price_level: a.price_level, description: a.description,
+           opentable_query: a.opentable_query, opentable_url: a.opentable_url,
+           phone: a.phone, map_query: a.map_query, hours: a.hours }]
+      : [];
+
+  const [selected, setSelected] = useState<number | null>(null);
+
+  const cuisine = options[0]?.cuisine ?? a.cuisine ?? "";
 
   return (
     <Card
-      title={`Restaurant${a.cuisine ? ` · ${a.cuisine}` : ""}`}
-      subtitle={a.name}
+      title={`Restaurants${cuisine ? ` · ${cuisine}` : ""}`}
+      subtitle={`${options.length} option${options.length !== 1 ? "s" : ""} found`}
       tone="success"
-      actions={a.price_level ? <Pill tone="amber">{a.price_level}</Pill> : undefined}
     >
-      <div className="flex items-center gap-3">
-        <StarRating rating={a.rating} />
-      </div>
-
-      {a.description ? (
-        <p className="text-[12.5px] leading-relaxed text-slate-300">{a.description}</p>
-      ) : null}
-
-      <div className="flex flex-col gap-1 text-[12.5px] text-slate-400">
-        {a.address ? (
-          <div className="flex items-start gap-1.5">
-            <span className="shrink-0">📍</span>
-            <span>{a.address}</span>
-          </div>
-        ) : null}
-        {a.hours ? (
-          <div className="flex items-start gap-1.5">
-            <span className="shrink-0">🕐</span>
-            <span>{a.hours}</span>
-          </div>
-        ) : null}
-        {a.phone ? (
-          <div className="flex items-start gap-1.5">
-            <span className="shrink-0">📞</span>
-            <span>{a.phone}</span>
-          </div>
-        ) : null}
-      </div>
-
-      {/* CTAs */}
-      <a
-        href={openTableUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="flex items-center justify-center gap-2 rounded-xl border border-orange-500/50 bg-orange-500/15 py-2.5 text-[13px] font-semibold text-orange-200 transition hover:bg-orange-500/25"
-      >
-        🗓️ Book on OpenTable
-      </a>
-
-      <div className="flex flex-wrap gap-1.5">
-        <LinkButton href={mapsUrl}>Directions</LinkButton>
-        {phoneUrl ? <LinkButton href={phoneUrl}>Call</LinkButton> : null}
-        <LinkButton href={googleSearchUrl((a.name ?? "") + " reviews")}>Reviews</LinkButton>
+      <div className="flex flex-col gap-2">
+        {options.map((r, i) => (
+          <RestaurantRow
+            key={i}
+            option={r}
+            isSelected={selected === i}
+            onSelect={() => setSelected(selected === i ? null : i)}
+          />
+        ))}
       </div>
     </Card>
+  );
+}
+
+function RestaurantRow({
+  option: r,
+  isSelected,
+  onSelect,
+}: {
+  option: RestaurantOption;
+  isSelected: boolean;
+  onSelect: () => void;
+}) {
+  // Build an OpenTable URL pre-filled with today's date at 7pm, 2 covers,
+  // and the restaurant name so the user lands on results, not a blank search.
+  const openTableUrl = useMemo(() => {
+    const dt = new Date();
+    dt.setHours(19, 0, 0, 0);
+    const dateTime = dt.toISOString().slice(0, 16); // "2026-04-26T19:00"
+    const term = encodeURIComponent(r.name ?? r.opentable_query ?? "");
+    return (
+      r.opentable_url
+      ?? `https://www.opentable.com/s/?covers=2&dateTime=${encodeURIComponent(dateTime)}&term=${term}`
+    );
+  }, [r.opentable_url, r.opentable_query, r.name]);
+
+  const mapsUrl = googleMapsUrl(r.map_query ?? r.name ?? "");
+  const phoneUrl = r.phone ? `tel:${r.phone.replace(/\s/g, "")}` : null;
+
+  const [phase, setPhase] = useState<BookingPhase>("idle");
+
+  const handlePay = useCallback(async () => {
+    setPhase("processing");
+    await new Promise((res) => setTimeout(res, 1800));
+    setPhase("confirmed");
+    // Open OpenTable — when the user closes that tab we treat it as booking done.
+    const win = window.open(openTableUrl, "_blank", "noreferrer");
+    if (win) {
+      const poll = setInterval(() => {
+        if (win.closed) {
+          clearInterval(poll);
+          setPhase("booked");
+        }
+      }, 500);
+    }
+  }, [openTableUrl]);
+
+  return (
+    <motion.div
+      layout
+      className={`rounded-xl border transition-colors ${
+        isSelected
+          ? "border-violet-500/40 bg-violet-500/5"
+          : "border-slate-700/50 bg-slate-900/40"
+      }`}
+    >
+      {/* Row header — always visible, click to expand */}
+      <button
+        onClick={onSelect}
+        className="flex w-full items-start gap-3 px-3 py-2.5 text-left"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[13.5px] font-semibold text-slate-100 truncate">
+              {r.name}
+            </span>
+            {r.price_level ? (
+              <span className="shrink-0 rounded-full border border-amber-500/30 px-1.5 py-px text-[9px] font-mono text-amber-400">
+                {r.price_level}
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-0.5 flex items-center gap-2">
+            <StarRating rating={r.rating} size="sm" />
+            {r.cuisine ? (
+              <span className="text-[11px] text-slate-500">{r.cuisine}</span>
+            ) : null}
+          </div>
+        </div>
+        <motion.span
+          animate={{ rotate: isSelected ? 180 : 0 }}
+          transition={{ duration: 0.2 }}
+          className="mt-0.5 shrink-0 text-slate-500 text-[10px]"
+        >
+          ▼
+        </motion.span>
+      </button>
+
+      {/* Expanded detail */}
+      <AnimatePresence initial={false}>
+        {isSelected && (
+          <motion.div
+            key="detail"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.22, ease: "easeInOut" }}
+            className="overflow-hidden"
+          >
+            <div className="flex flex-col gap-2.5 border-t border-slate-700/40 px-3 pb-3 pt-2.5">
+              {r.description ? (
+                <p className="text-[12px] leading-relaxed text-slate-300">{r.description}</p>
+              ) : null}
+
+              <div className="flex flex-col gap-1 text-[11.5px] text-slate-400">
+                {r.address && <div className="flex gap-1.5"><span>📍</span><span>{r.address}</span></div>}
+                {r.hours   && <div className="flex gap-1.5"><span>🕐</span><span>{r.hours}</span></div>}
+                {r.phone   && <div className="flex gap-1.5"><span>📞</span><span>{r.phone}</span></div>}
+              </div>
+
+              {/* Payment gate */}
+              <AnimatePresence mode="wait">
+                {phase === "idle" && (
+                  <motion.button
+                    key="reserve"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setPhase("paying")}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 py-2 text-[12.5px] font-semibold text-white transition hover:from-violet-500 hover:to-indigo-500"
+                  >
+                    🗓️ Reserve Table
+                    <span className="rounded-full border border-white/20 bg-white/10 px-1.5 py-px text-[9px] font-mono">
+                      0.10 FET
+                    </span>
+                  </motion.button>
+                )}
+
+                {phase === "paying" && (
+                  <motion.div
+                    key="gate"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-2.5 flex flex-col gap-2"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex h-5 w-5 items-center justify-center rounded bg-gradient-to-br from-violet-600 to-indigo-700 text-[10px] font-bold text-white">F</div>
+                      <span className="text-[10px] font-mono uppercase tracking-widest text-slate-400">Fetch.ai · Payment Request</span>
+                      <span className="ml-auto rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[9px] font-mono text-amber-300">testnet</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border border-slate-700/50 bg-slate-900/60 px-2.5 py-1.5">
+                      <div>
+                        <div className="text-[9px] text-slate-500">Amount</div>
+                        <div className="text-[16px] font-light text-slate-100">0.10 <span className="text-[11px] text-slate-400">FET</span></div>
+                      </div>
+                      <div className="text-right text-[10px] text-slate-400">
+                        <div>Table reservation</div>
+                        <div className="font-mono text-slate-500">GlanceConnectAgent</div>
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button onClick={() => setPhase("idle")} className="flex-1 rounded-md border border-slate-700/60 bg-slate-900/40 py-1.5 text-[11px] text-slate-400 transition hover:text-slate-200">Cancel</button>
+                      <button onClick={handlePay} className="flex-[2] rounded-md bg-gradient-to-r from-violet-600 to-indigo-600 py-1.5 text-[12px] font-semibold text-white transition hover:from-violet-500 hover:to-indigo-500">Pay 0.10 FET</button>
+                    </div>
+                  </motion.div>
+                )}
+
+                {phase === "processing" && (
+                  <motion.div key="proc" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    className="flex items-center justify-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 py-2 text-[12px] text-slate-300">
+                    <svg className="h-3.5 w-3.5 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                    Confirming on Fetch.ai testnet…
+                  </motion.div>
+                )}
+
+                {phase === "confirmed" && (
+                  <motion.div key="confirmed" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+                    className="flex flex-col gap-0.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2">
+                    <div className="text-[12px] font-semibold text-violet-300">
+                      ✓ 0.10 FET paid · Finish on OpenTable
+                    </div>
+                    <div className="text-[10.5px] text-slate-400">
+                      Close the OpenTable tab when done to confirm your booking here.
+                    </div>
+                  </motion.div>
+                )}
+
+                {phase === "booked" && (
+                  <motion.div key="booked"
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ type: "spring", stiffness: 520, damping: 26 }}
+                    className="flex flex-col items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-3">
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      transition={{ type: "spring", stiffness: 520, damping: 22, delay: 0.08 }}
+                      className="text-2xl"
+                    >
+                      🎉
+                    </motion.div>
+                    <div className="text-[13px] font-semibold text-emerald-300">Reservation confirmed!</div>
+                    <div className="text-[10.5px] text-slate-400 text-center">
+                      Paid via Fetch.ai · {r.name}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="flex flex-wrap gap-1.5">
+                <LinkButton href={mapsUrl}>Directions</LinkButton>
+                {phoneUrl ? <LinkButton href={phoneUrl}>Call</LinkButton> : null}
+                <LinkButton href={googleSearchUrl((r.name ?? "") + " reviews")}>Reviews</LinkButton>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
 
@@ -1505,6 +1710,458 @@ function GroceryListCard({ a }: { a: GroceryListArtifact }) {
           </a>
         ) : null}
       </div>
+    </Card>
+  );
+}
+
+// --- Price Comparison (Fetch.ai parallel agents) -------------------------
+
+const PLATFORM_COLORS: Record<string, string> = {
+  Amazon: "text-orange-300 border-orange-500/30 bg-orange-500/8",
+  Reddit: "text-red-300 border-red-500/30 bg-red-500/8",
+  "Google Shopping": "text-sky-300 border-sky-500/30 bg-sky-500/8",
+};
+
+const PLATFORM_ICONS: Record<string, string> = {
+  Amazon: "🛒",
+  Reddit: "💬",
+  "Google Shopping": "🔍",
+};
+
+function PriceSourceCard({ s }: { s: PriceSource }) {
+  const color = PLATFORM_COLORS[s.platform] ?? "text-slate-300 border-slate-700 bg-slate-900/40";
+  const icon = PLATFORM_ICONS[s.platform] ?? "🌐";
+
+  return (
+    <div className={`rounded-xl border px-3 py-2.5 flex flex-col gap-1.5 ${color}`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[12px] font-semibold">
+          <span>{icon}</span>
+          <span>{s.platform}</span>
+        </div>
+        {s.price && (
+          <span className="text-[15px] font-light text-slate-100">{s.price}</span>
+        )}
+        {s.sentiment && (
+          <span className={`text-[11px] font-mono px-1.5 py-px rounded-full border ${
+            s.sentiment === "positive" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" :
+            s.sentiment === "negative" ? "border-red-500/30 bg-red-500/10 text-red-300" :
+            "border-amber-500/30 bg-amber-500/10 text-amber-300"
+          }`}>{s.sentiment}</span>
+        )}
+      </div>
+
+      {/* Amazon specifics */}
+      {s.verdict && <p className="text-[11.5px] text-slate-300">{s.verdict}</p>}
+      {s.prime && (
+        <div className="flex items-center gap-1 text-[10.5px] text-sky-300">
+          <span>⚡</span><span>{s.delivery ?? "Prime eligible"}</span>
+        </div>
+      )}
+      {s.highlights?.length ? (
+        <div className="flex flex-wrap gap-1">
+          {s.highlights.map((h, i) => (
+            <span key={i} className="rounded-full border border-slate-700/60 bg-slate-900/50 px-1.5 py-px text-[10px] text-slate-400">{h}</span>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Reddit specifics */}
+      {s.summary && <p className="text-[11.5px] text-slate-300 leading-snug">{s.summary}</p>}
+      {s.top_comment && (
+        <blockquote className="border-l-2 border-slate-600 pl-2 text-[11px] italic text-slate-400">"{s.top_comment}"</blockquote>
+      )}
+      {s.concerns?.length ? (
+        <div className="text-[10.5px] text-amber-400/80">⚠ {s.concerns.join(" · ")}</div>
+      ) : null}
+
+      {/* Google Shopping specifics */}
+      {s.lowest_price && (
+        <div className="text-[11.5px] text-slate-300">
+          Lowest: <span className="text-emerald-300 font-semibold">{s.lowest_price}</span>
+          {s.lowest_seller ? <span className="text-slate-500"> from {s.lowest_seller}</span> : null}
+        </div>
+      )}
+      {s.price_trend && (
+        <div className={`text-[10.5px] font-mono ${s.price_trend === "falling" ? "text-emerald-400" : s.price_trend === "rising" ? "text-red-400" : "text-slate-400"}`}>
+          {s.price_trend === "falling" ? "↓ Falling" : s.price_trend === "rising" ? "↑ Rising" : "→ Stable"}
+          {s.typical_range ? <span className="text-slate-500 ml-1">· {s.typical_range}</span> : null}
+        </div>
+      )}
+      {s.tip && <p className="text-[11px] text-slate-400">{s.tip}</p>}
+
+      {s.url && (
+        <a href={s.url} target="_blank" rel="noreferrer"
+          className="mt-0.5 text-[10.5px] text-slate-500 underline hover:text-slate-300 truncate">
+          View on {s.platform} →
+        </a>
+      )}
+    </div>
+  );
+}
+
+// Shared micro-payment trail shown in price comparison + debate cards
+function AgentPaymentTrail({ payments, total }: { payments?: AgentPayment[]; total?: number }) {
+  if (!payments?.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/5 px-2.5 py-1.5">
+      <span className="text-[9.5px] font-mono uppercase tracking-widest text-violet-400">Agent payments</span>
+      {payments.map((p, i) => (
+        <span key={i} className="flex items-center gap-1 rounded-full border border-violet-500/20 bg-violet-500/10 px-1.5 py-px text-[9.5px] font-mono text-violet-300">
+          {p.to?.replace("Glance", "").replace("Agent", "")} {p.amount} {p.currency}
+        </span>
+      ))}
+      {total !== undefined && (
+        <span className="ml-auto text-[9.5px] font-mono text-violet-400">{total.toFixed(2)} FET total</span>
+      )}
+    </div>
+  );
+}
+
+function PriceComparisonCard({ a }: { a: PriceComparisonArtifact }) {
+  return (
+    <Card
+      title="Price Comparison"
+      subtitle={a.product}
+      tone="info"
+      actions={
+        a.fetch_parallel_ms ? (
+          <div className="flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5">
+            <div className="h-1.5 w-1.5 rounded-full bg-violet-400 shadow-[0_0_6px_rgba(167,139,250,0.9)]" />
+            <span className="font-mono text-[9px] uppercase tracking-widest text-violet-300">
+              3 agents · {a.fetch_parallel_ms}ms
+            </span>
+          </div>
+        ) : undefined
+      }
+    >
+      {!a.sources?.length ? (
+        <p className="text-[12.5px] text-slate-500">No results found.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {a.sources.map((s, i) => (
+            <PriceSourceCard key={i} s={s} />
+          ))}
+        </div>
+      )}
+      <AgentPaymentTrail payments={a.agent_payments} total={a.total_paid_fet} />
+    </Card>
+  );
+}
+
+// --- Price Monitor (Fetch.ai autonomous agent) ---------------------------
+
+type MonitorPhase = "payment" | "paying" | "processing_pay" | "watching" | "alert";
+
+function PriceMonitorCard({ a }: { a: PriceMonitorArtifact }) {
+  const [phase, setPhase] = useState<MonitorPhase>("payment");
+  const [secondsLeft, setSecondsLeft] = useState(5);
+  const [alertData, setAlertData] = useState<{
+    current_price?: string; drop_amount?: string; drop_pct?: number; best_url?: string; note?: string;
+  } | null>(null);
+
+  // Countdown + poll for alert
+  useEffect(() => {
+    if (phase !== "watching") return;
+    const monitorId = a.monitor_id;
+    const product = a.product ?? "this product";
+    const targetPrice = a.target_price ?? 200;
+
+    const tick = setInterval(() => {
+      setSecondsLeft((s) => {
+        if (s <= 1) {
+          clearInterval(tick);
+          // Simulate alert firing
+          const droppedPrice = (targetPrice - 30).toFixed(2);
+          setAlertData({
+            current_price: `$${droppedPrice}`,
+            drop_amount: "$30.00",
+            drop_pct: 12,
+            best_url: `https://www.amazon.com/s?k=${encodeURIComponent(product)}`,
+            note: "Price just dropped below your target!",
+          });
+          setPhase("alert");
+          const notifBody = `${product} dropped to $${droppedPrice} — below your $${targetPrice} target!`;
+          if (Notification.permission === "granted") {
+            new Notification("📉 Price Alert — Glance", { body: notifBody });
+          } else if (Notification.permission !== "denied") {
+            Notification.requestPermission().then((p) => {
+              if (p === "granted") new Notification("📉 Price Alert — Glance", { body: notifBody });
+            });
+          }
+          return 0;
+        }
+        // Poll bridge if we have a real monitor_id
+        if (monitorId && s % 5 === 0) {
+          fetch(`http://127.0.0.1:8020/price_monitor/${monitorId}`)
+            .then((r) => r.json())
+            .then((body) => {
+              if (body.status === "alert" && body.alert) {
+                clearInterval(tick);
+                setAlertData(body.alert);
+                setPhase("alert");
+              }
+            })
+            .catch(() => {/* bridge might not be running — demo timer handles it */});
+        }
+        return s - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(tick);
+  }, [phase, a.monitor_id, a.product, a.target_price]);
+
+  const handlePay = useCallback(async () => {
+    setPhase("processing_pay");
+    await new Promise((r) => setTimeout(r, 1600));
+    setPhase("watching");
+    setSecondsLeft(5);
+  }, []);
+
+  return (
+    <Card
+      title="Price Monitor"
+      subtitle={a.product}
+      tone="info"
+      actions={
+        <div className="flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5">
+          <div className={`h-1.5 w-1.5 rounded-full bg-violet-400 ${phase === "watching" ? "animate-pulse" : ""}`} />
+          <span className="font-mono text-[9px] uppercase tracking-widest text-violet-300">
+            Fetch.ai Agent
+          </span>
+        </div>
+      }
+    >
+      <AnimatePresence mode="wait">
+        {phase === "payment" && (
+          <motion.div key="payment" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="flex flex-col gap-3">
+            <div className="flex items-center justify-between rounded-xl border border-slate-700/50 bg-slate-900/50 px-3 py-2.5">
+              <div>
+                <div className="text-[10px] text-slate-500">Target price</div>
+                <div className="text-[20px] font-light text-slate-100">
+                  ${a.target_price?.toFixed(2) ?? "—"}
+                </div>
+              </div>
+              <div className="text-right text-[11px] text-slate-400">
+                <div>Agent fee</div>
+                <div className="text-[16px] font-light text-violet-300">0.05 FET</div>
+              </div>
+            </div>
+            <div className="text-[11.5px] text-slate-400 leading-relaxed">
+              A Fetch.ai <span className="text-violet-300">GlancePriceMonitor</span> agent will
+              autonomously watch this product and alert you the moment it drops below your target.
+            </div>
+            <button
+              onClick={() => setPhase("paying")}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 py-2.5 text-[13px] font-semibold text-white transition hover:from-violet-500 hover:to-indigo-500"
+            >
+              Start Monitoring · 0.05 FET
+            </button>
+          </motion.div>
+        )}
+
+        {phase === "paying" && (
+          <motion.div key="paying" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-3 flex flex-col gap-2.5">
+            <div className="flex items-center gap-2">
+              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-gradient-to-br from-violet-600 to-indigo-700 text-[11px] font-bold text-white">F</div>
+              <span className="text-[11px] font-mono uppercase tracking-widest text-slate-400">Fetch.ai · Payment Request</span>
+              <span className="ml-auto rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[9px] font-mono text-amber-300">testnet</span>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-700/50 bg-slate-900/60 px-3 py-2">
+              <div>
+                <div className="text-[10px] text-slate-500">Amount</div>
+                <div className="text-[18px] font-light text-slate-100">0.05 <span className="text-[12px] text-slate-400">FET</span></div>
+              </div>
+              <div className="text-right text-[11px] text-slate-400">
+                <div>Price monitoring</div>
+                <div className="font-mono text-slate-500">GlancePriceMonitor</div>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setPhase("payment")} className="flex-1 rounded-lg border border-slate-700/60 bg-slate-900/40 py-2 text-[11px] text-slate-400 transition hover:text-slate-200">Cancel</button>
+              <button onClick={handlePay} className="flex-[2] rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 py-2 text-[12px] font-semibold text-white transition hover:from-violet-500 hover:to-indigo-500">Pay 0.05 FET</button>
+            </div>
+          </motion.div>
+        )}
+
+        {phase === "processing_pay" && (
+          <motion.div key="proc" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="flex items-center justify-center gap-2 rounded-xl border border-violet-500/20 bg-violet-500/5 py-4 text-[13px] text-slate-300">
+            <svg className="h-4 w-4 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+            Activating agent on Fetch.ai testnet…
+          </motion.div>
+        )}
+
+        {phase === "watching" && (
+          <motion.div key="watching" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="flex flex-col gap-3">
+            <div className="flex items-center gap-3 rounded-xl border border-violet-500/20 bg-violet-500/5 px-3 py-3">
+              <div className="relative flex h-8 w-8 items-center justify-center">
+                <div className="absolute inset-0 animate-ping rounded-full bg-violet-500/30" />
+                <div className="h-3 w-3 rounded-full bg-violet-400" />
+              </div>
+              <div className="flex-1">
+                <div className="text-[12.5px] font-semibold text-violet-300">Agent watching…</div>
+                <div className="text-[11px] text-slate-400">GlancePriceMonitor · Fetch.ai testnet</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[18px] font-light text-slate-100 tabular-nums">{secondsLeft}s</div>
+                <div className="text-[10px] text-slate-500">next check</div>
+              </div>
+            </div>
+            <div className="text-[11px] text-slate-500 text-center">
+              Monitoring <span className="text-slate-300">{a.product}</span> below <span className="text-emerald-300">${a.target_price?.toFixed(2)}</span>
+            </div>
+          </motion.div>
+        )}
+
+        {phase === "alert" && alertData && (
+          <motion.div key="alert"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: "spring", stiffness: 480, damping: 28 }}
+            className="flex flex-col gap-2.5">
+            <div className="flex flex-col items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 py-3 px-4">
+              <div className="text-2xl">📉</div>
+              <div className="text-[14px] font-bold text-emerald-300">Price dropped!</div>
+              <div className="flex items-center gap-2 text-[13px]">
+                <span className="text-slate-400 line-through">${a.target_price?.toFixed(2)}</span>
+                <span className="text-emerald-300 font-semibold">{alertData.current_price}</span>
+                {alertData.drop_pct ? (
+                  <span className="rounded-full bg-emerald-500/20 px-1.5 py-px text-[10px] font-mono text-emerald-400">
+                    -{alertData.drop_pct}%
+                  </span>
+                ) : null}
+              </div>
+              {alertData.note && <p className="text-[11px] text-slate-400 text-center">{alertData.note}</p>}
+            </div>
+            {alertData.best_url && (
+              <a href={alertData.best_url} target="_blank" rel="noreferrer"
+                className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 py-2.5 text-[13px] font-semibold text-white transition hover:from-emerald-500 hover:to-teal-500">
+                🛒 Buy Now
+              </a>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </Card>
+  );
+}
+
+// --- Debate (Fetch.ai multi-agent) ---------------------------------------
+
+function DebateSidePanel({
+  side,
+  tone,
+}: {
+  side: DebateSide;
+  tone: "pro" | "con";
+}) {
+  const isPro = tone === "pro";
+  const border = isPro ? "border-emerald-500/25" : "border-red-500/25";
+  const bg = isPro ? "bg-emerald-500/5" : "bg-red-500/5";
+  const accent = isPro ? "text-emerald-300" : "text-red-300";
+  const barColor = isPro ? "bg-emerald-500" : "bg-red-500";
+  const label = isPro ? "FOR" : "AGAINST";
+
+  return (
+    <div className={`flex-1 rounded-xl border ${border} ${bg} p-3 flex flex-col gap-2`}>
+      <div className="flex items-center justify-between">
+        <span className={`text-[9.5px] font-mono uppercase tracking-widest ${accent}`}>{label}</span>
+        {side.confidence !== undefined && (
+          <span className={`text-[9px] font-mono ${accent}`}>{side.confidence}%</span>
+        )}
+      </div>
+      {/* Confidence bar */}
+      {side.confidence !== undefined && (
+        <div className="h-0.5 w-full rounded-full bg-slate-800">
+          <div className={`h-0.5 rounded-full ${barColor}`} style={{ width: `${side.confidence}%` }} />
+        </div>
+      )}
+      {side.stance && (
+        <p className={`text-[12px] font-semibold leading-snug ${accent}`}>{side.stance}</p>
+      )}
+      {side.arguments?.length ? (
+        <ul className="space-y-1">
+          {side.arguments.map((arg, i) => (
+            <li key={i} className="flex gap-1.5 text-[11px] text-slate-300">
+              <span className={`mt-0.5 shrink-0 ${accent}`}>•</span>
+              <span>{arg}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {side.key_quote && (
+        <blockquote className="border-l-2 border-slate-600 pl-2 text-[10.5px] italic text-slate-400 leading-snug">
+          "{side.key_quote}"
+        </blockquote>
+      )}
+      <div className={`mt-auto text-[9px] font-mono ${accent} opacity-60`}>
+        {side.agent?.replace("Glance", "").replace("Agent", "")}
+      </div>
+    </div>
+  );
+}
+
+function DebateCard({ a }: { a: DebateArtifact }) {
+  const lean = a.synthesis?.lean;
+  const leanColor = lean === "pro" ? "text-emerald-300" : lean === "con" ? "text-red-300" : "text-slate-300";
+
+  return (
+    <Card
+      title="Debate"
+      subtitle={a.topic ? (a.topic.length > 55 ? a.topic.slice(0, 55) + "…" : a.topic) : undefined}
+      tone="info"
+      actions={
+        a.fetch_parallel_ms ? (
+          <div className="flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5">
+            <div className="h-1.5 w-1.5 rounded-full bg-violet-400 shadow-[0_0_6px_rgba(167,139,250,0.9)]" />
+            <span className="font-mono text-[9px] uppercase tracking-widest text-violet-300">
+              {a.fetch_agents ?? 3} agents · {a.fetch_parallel_ms}ms
+            </span>
+          </div>
+        ) : undefined
+      }
+    >
+      {/* Pro / Con columns */}
+      <div className="flex gap-2">
+        {a.pro && <DebateSidePanel side={a.pro} tone="pro" />}
+        {a.con && <DebateSidePanel side={a.con} tone="con" />}
+      </div>
+
+      {/* Synthesis */}
+      {a.synthesis && (
+        <div className="rounded-xl border border-violet-500/25 bg-violet-500/5 p-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[9.5px] font-mono uppercase tracking-widest text-violet-400">Synthesis</span>
+            {a.synthesis.verdict && (
+              <span className={`rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-px text-[10px] font-semibold ${leanColor}`}>
+                {a.synthesis.verdict}
+              </span>
+            )}
+          </div>
+          {a.synthesis.recommendation && (
+            <p className="text-[12px] leading-relaxed text-slate-200">{a.synthesis.recommendation}</p>
+          )}
+          {a.synthesis.factors?.length ? (
+            <div className="flex flex-wrap gap-1">
+              {a.synthesis.factors.map((f, i) => (
+                <span key={i} className="rounded-full border border-slate-700/50 bg-slate-900/50 px-2 py-px text-[10px] text-slate-400">{f}</span>
+              ))}
+            </div>
+          ) : null}
+          <div className="text-[9px] font-mono text-violet-400 opacity-60">
+            {a.synthesis.agent?.replace("Glance", "").replace("Agent", "")}
+          </div>
+        </div>
+      )}
+
+      <AgentPaymentTrail payments={a.agent_payments} total={a.total_paid_fet} />
     </Card>
   );
 }

@@ -103,6 +103,70 @@ If main doesn't rebuild after a change, check for a TS error in the terminal.
 | Region capture does nothing, no overlay | Screen Recording permission missing | grant in System Settings → Privacy & Security → Screen Recording, then quit + relaunch |
 | Composer × cleared my selection | you're on an old build — modern shell uses `minimizeShell` which preserves context. Only `Cmd+K` is destructive | rebuild; see `docs/ui-shell.md` |
 
+## Fetch.ai Agentverse agents
+
+### First-time setup
+
+```bash
+cd services/agentverse
+uv venv
+uv pip install -r requirements.txt
+cp .env.example .env
+# Edit .env — set OPENAI_API_KEY or XAI_API_KEY (at least one required)
+```
+
+### Run all agents + bridge
+
+```bash
+cd services/agentverse
+.venv/bin/python run_all.py
+```
+
+`run_all.py` starts five processes: the HTTP bridge (port 8020) first, then the
+four uagents (ConnectAgent, DiscoverAgent, CodeAgent, Orchestrator on ports
+8013–8010). Once the bridge is up, the main FastAPI backend at `:8765` will
+automatically route `food_order`, `restaurant_booking`, and `fix_code` through
+it instead of calling the LLM directly.
+
+On startup each agent prints its Agentverse address, e.g.:
+```
+ConnectAgent  address: agent1qwt4ftn6hm5wrm5j25v7ulrcn25vnkc6zej9uer2u0rrkujnasmlw4dcjqf
+DiscoverAgent address: agent1qf9tjtrt3ar7y80yqexhheeh7gypt553f2gg0yp85nxzhh6p43w6ctmd8nu
+CodeAgent     address: agent1qfynx2v5z4kju5cwurv990gxdtrh243f0yxxyqnmste4eptnsdmm6zmwjw2
+Orchestrator  address: agent1q0j7r8723g7nnntgz2k3xwwfx7yyjqpvge2radl5fx5s04gapqxws2wvw5x
+```
+
+These addresses are **deterministic** (derived from fixed seeds) — they won't
+change between restarts.
+
+### Register on Agentverse (for ASI:One discovery)
+
+1. Set `AGENTVERSE_API_KEY` in `.env` (get from https://agentverse.ai/settings).
+2. Run `run_all.py` — the `mailbox=True` flag will auto-register each agent.
+3. In the terminal, click the Inspector URL that appears and connect a mailbox
+   for each agent.
+4. Set a name and description on each agent's Agentverse profile so ASI:One
+   can discover it semantically.
+
+### Demo flows via ASI:One
+
+| User says | Routes to | Artifact | Cost |
+|---|---|---|---|
+| Paste buggy code | CodeAgent | `fix_code` | Free |
+| "I want to make ramen tonight" | DiscoverAgent | `food_order` | Free |
+| "Find me a sushi restaurant to book downtown LA" | ConnectAgent | `restaurant_booking` | 0.10 FET |
+
+### Smoke test without Agentverse
+
+Run a single agent directly to verify LLM connectivity:
+
+```bash
+cd services/agentverse
+.venv/bin/python agents/code_agent.py
+# In another terminal:
+# Then use the Inspector URL to send a test ChatMessage
+```
+
 ## Packaging (post-hack)
 
 Not configured for this branch. When we ship, we'll wire `electron-builder`

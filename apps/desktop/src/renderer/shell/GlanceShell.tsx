@@ -312,28 +312,9 @@ export function GlanceShell() {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // Decide which image to send to the artifact router.
-      // 1. Explicit region capture (Cmd+Ctrl+S) or caller-provided image wins.
-      // 2. Otherwise grab an ambient full-screen snapshot so the model sees
-      //    what's actually on screen. Falls back gracefully on any failure.
-      let wireImage: string | null = imageUrl;
-      if (!wireImage) {
-        try {
-          const t0 = performance.now();
-          const cap = await window.deepFocus?.capture?.fullscreen?.();
-          const ms = Math.round(performance.now() - t0);
-          if (cap?.ok && cap.value?.dataUrl) {
-            wireImage = cap.value.dataUrl;
-            console.info(
-              `[chat] ambient full-screen capture attached (${cap.value.width}×${cap.value.height}, ${ms}ms)`,
-            );
-          } else {
-            console.info(`[chat] ambient capture unavailable (${ms}ms) — no image context`);
-          }
-        } catch (err) {
-          console.warn("[chat] ambient capture threw — continuing without image:", err);
-        }
-      }
+      // Only send an image when the user explicitly captured one (region or
+      // fullscreen hotkey). No ambient capture on plain text queries.
+      const wireImage: string | null = imageUrl;
 
       try {
         const res = await runArtifact({
@@ -479,6 +460,19 @@ export function GlanceShell() {
           if (m.selection?.text || m.image?.dataUrl) {
             sel = m.selection ?? null;
             img = m.image ?? null;
+            break;
+          }
+        }
+      }
+      // Also fall back to the last plain typed message so action chips like
+      // "Order food" carry context from "fastfood burger near UCLA" even when
+      // it was typed (not selected) and pendingSelection has been cleared.
+      if (!sel?.text && !img?.dataUrl) {
+        for (let i = store.messages.length - 1; i >= 0; i -= 1) {
+          const m = store.messages[i];
+          if (m.role !== "user" || m.action) continue;
+          if (m.content && !m.content.startsWith("(")) {
+            sel = { text: m.content, sourceApp: null };
             break;
           }
         }
@@ -727,7 +721,6 @@ export function GlanceShell() {
             {lastArtifactMsg?.artifact ? (
               <motion.div
                 key={`artifact-${lastArtifactMsg.id}`}
-
                 initial={{ opacity: 0, y: 10, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 6, scale: 0.97 }}
@@ -1146,7 +1139,28 @@ function humanizeBackendError(raw: string): string {
   if (/failed to fetch|network|ECONNREFUSED/i.test(s)) {
     return "Couldn't reach the backend. Is `pnpm dev:backend` running?";
   }
+  // Strip raw upstream API errors (e.g. "Upstream 400 from https://api.openai.com/...")
+  // These expose internal URLs and raw JSON — replace with something actionable.
+  if (/upstream\s+\d{3}\s+from\s+https?:\/\//i.test(s)) {
+    if (/invalid_base64|invalid.*image/i.test(s)) {
+      return "Screen capture produced an invalid image. Try again or use Cmd+Ctrl+S to capture a specific region.";
+    }
+    if (/rate.?limit|429/i.test(s)) return "AI provider is rate-limited — wait a moment and try again.";
+    if (/invalid.*api.?key|authentication/i.test(s)) return "Invalid API key — check your key in Settings.";
+    return "The AI provider returned an error. Check your API key in Settings or try again.";
+  }
   return s;
+}
+
+function isValidDataUrl(dataUrl: string): boolean {
+  // Must be a data URL with a recognised image MIME and non-trivial base64 payload.
+  if (!dataUrl.startsWith("data:image/")) return false;
+  const comma = dataUrl.indexOf(",");
+  if (comma === -1) return false;
+  const payload = dataUrl.slice(comma + 1);
+  // Base64 payload should be substantial (empty/tiny captures are useless)
+  // and must not contain characters outside the base64 alphabet.
+  return payload.length > 512 && /^[A-Za-z0-9+/=]+$/.test(payload.slice(0, 256));
 }
 
 function prettyActionId(id: string): string {

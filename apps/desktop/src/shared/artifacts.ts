@@ -227,8 +227,24 @@ export type WeatherArtifact = {
   weather_query?: string;
 };
 
+export type RestaurantOption = {
+  name?: string;
+  cuisine?: string;
+  address?: string;
+  rating?: number;
+  price_level?: string;
+  description?: string;
+  opentable_query?: string;
+  opentable_url?: string;
+  phone?: string | null;
+  map_query?: string;
+  hours?: string | null;
+};
+
 export type RestaurantBookingArtifact = {
   kind: "restaurant_booking";
+  restaurants?: RestaurantOption[];
+  // Legacy single-restaurant fields — kept for backwards compat
   name?: string;
   cuisine?: string;
   address?: string;
@@ -338,6 +354,90 @@ export type GenericArtifact = {
   [key: string]: unknown;
 };
 
+export type PriceSource = {
+  platform: "Amazon" | "Reddit" | "Google Shopping" | string;
+  product?: string;
+  // Amazon fields
+  price?: string;
+  rating?: number;
+  review_count?: number;
+  prime?: boolean;
+  delivery?: string;
+  seller?: string;
+  verdict?: string;
+  highlights?: string[];
+  // Reddit fields
+  sentiment?: "positive" | "mixed" | "negative";
+  score?: number;
+  summary?: string;
+  top_comment?: string;
+  concerns?: string[];
+  subreddits?: string[];
+  // Google Shopping fields
+  lowest_price?: string;
+  lowest_seller?: string;
+  typical_range?: string;
+  in_stock?: boolean;
+  price_trend?: "rising" | "falling" | "stable";
+  tip?: string;
+  // shared
+  url?: string;
+  error?: string;
+};
+
+export type AgentPayment = {
+  from?: string;
+  to?: string;
+  amount?: number;
+  currency?: string;
+  for?: string;
+};
+
+export type PriceComparisonArtifact = {
+  kind: "price_comparison";
+  product?: string;
+  sources?: PriceSource[];
+  fetch_parallel_ms?: number;
+  agent_payments?: AgentPayment[];
+  total_paid_fet?: number;
+};
+
+export type DebateSide = {
+  agent?: string;
+  stance?: string;
+  confidence?: number;
+  arguments?: string[];
+  key_quote?: string;
+};
+
+export type DebateSynthesis = {
+  agent?: string;
+  verdict?: string;
+  recommendation?: string;
+  factors?: string[];
+  lean?: "pro" | "con" | "neutral";
+};
+
+export type DebateArtifact = {
+  kind: "debate";
+  topic?: string;
+  pro?: DebateSide;
+  con?: DebateSide;
+  synthesis?: DebateSynthesis;
+  fetch_agents?: number;
+  fetch_parallel_ms?: number;
+  agent_payments?: AgentPayment[];
+  total_paid_fet?: number;
+};
+
+export type PriceMonitorArtifact = {
+  kind: "price_monitor";
+  product?: string;
+  target_price?: number;
+  monitor_id?: string;
+  status?: "watching" | "alert";
+};
+
 // Every concrete artifact may carry these suggestion hooks — the renderer
 // reads them on the raw object rather than requiring each union member to
 // redeclare them.
@@ -374,6 +474,9 @@ export type Artifact = (
   | EmailComposeArtifact
   | JobApplyArtifact
   | GroceryListArtifact
+  | PriceComparisonArtifact
+  | PriceMonitorArtifact
+  | DebateArtifact
   | GenericArtifact
 ) &
   WithSuggestions;

@@ -26,14 +26,21 @@ import logging
 import re
 from typing import Any, AsyncIterator
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.artifacts import ACTIONS, list_actions, mock_artifact
+from app.config import settings
 from app.providers import get_chat_provider, get_vision_provider
 from app.router import route_action
 from app.store.memory import Exchange, store
+
+# Actions routed through the Fetch.ai Agentverse bridge instead of the
+# local LLM. When the bridge is unreachable the stream falls back gracefully.
+_AGENTVERSE_ACTIONS = {"fix_code", "food_order", "restaurant_booking",
+                       "price_comparison", "price_monitor", "debate"}
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +129,7 @@ async def _artifact_event_stream(
             image_data_url=req.image_data_url,
             user_instruction=req.user_instruction,
             window_context=req.window_context,
+            history=_history_wire(session_id),
         )
         chosen_action = routing["action"]
         routed_alternatives = routing.get("alternatives") or []
@@ -182,6 +190,19 @@ async def _artifact_event_stream(
 
     spec = ACTIONS[chosen_action]
     user_payload = _user_payload(req.text, req.user_instruction, spec.label)
+
+    # Delegate Agentverse-integrated actions to the bridge (port 8020).
+    # Skip delegation in mock mode so offline demos still work end-to-end.
+    if chosen_action in _AGENTVERSE_ACTIONS:
+        try:
+            p = get_chat_provider()
+            is_mock = getattr(p, "name", "") == "mock"
+        except Exception:
+            is_mock = False
+        if not is_mock:
+            async for evt in _agentverse_stream(req, session_id, chosen_action, user_payload):
+                yield evt
+            return
 
     # Replay prior turns so follow-ups ("what about option 2?") resolve
     # against what the assistant just said. Artifact responses persisted by
@@ -298,6 +319,108 @@ async def _artifact_event_stream(
         ),
     }
     yield {"event": "done", "data": json.dumps({"session_id": session_id})}
+
+
+async def _agentverse_stream(
+    req: ArtifactRequest,
+    session_id: str,
+    action: str,
+    user_payload: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Delegate action to the Fetch.ai Agentverse bridge and wrap as SSE."""
+    yield {
+        "event": "meta",
+        "data": json.dumps(
+            {"provider": "fetch_ai", "model": "agentverse", "session_id": session_id}
+        ),
+    }
+
+    bridge = settings.agentverse_bridge_url
+    _BRIDGE_NOT_RUNNING = (
+        "Agentverse bridge is not running. "
+        "Start it with: cd services/agentverse && .venv/bin/python run_all.py"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            if action == "price_comparison":
+                r = await client.post(
+                    f"{bridge}/price_compare",
+                    json={"action": action, "text": user_payload},
+                )
+            elif action == "debate":
+                r = await client.post(
+                    f"{bridge}/debate",
+                    json={"text": user_payload},
+                )
+            elif action == "price_monitor":
+                # Extract product + target_price from payload for the monitor endpoint
+                product, target = _parse_monitor_request(user_payload)
+                r = await client.post(
+                    f"{bridge}/price_monitor",
+                    json={"text": user_payload, "product": product, "target_price": target},
+                )
+            else:
+                r = await client.post(
+                    f"{bridge}/agent",
+                    json={"action": action, "text": user_payload},
+                )
+            r.raise_for_status()
+            body = r.json()
+
+        data: dict[str, Any] = body.get("artifact") or {}
+        data.setdefault("kind", action)
+        # Carry through parallel timing for the demo badge
+        if body.get("elapsed_ms"):
+            data["fetch_parallel_ms"] = body["elapsed_ms"]
+
+    except httpx.ConnectError:
+        yield {"event": "error", "data": json.dumps({"message": _BRIDGE_NOT_RUNNING})}
+        yield {"event": "done", "data": json.dumps({"session_id": session_id})}
+        return
+    except Exception as exc:
+        logger.exception("Agentverse bridge call failed")
+        yield {"event": "error", "data": json.dumps({"message": str(exc)})}
+        yield {"event": "done", "data": json.dumps({"session_id": session_id})}
+        return
+
+    _persist(session_id, req, data, provider="fetch_ai", model="agentverse")
+    yield {
+        "event": "artifact",
+        "data": json.dumps(
+            {
+                "artifact": data,
+                "meta": {
+                    "provider": "fetch_ai",
+                    "model": "agentverse",
+                    "session_id": session_id,
+                    "via": "fetch_ai_agentverse",
+                },
+            }
+        ),
+    }
+    yield {"event": "done", "data": json.dumps({"session_id": session_id})}
+
+
+import re as _re
+
+def _parse_monitor_request(text: str) -> tuple[str, float]:
+    """Extract product name and target price from user instruction."""
+    below = _re.search(
+        r"\b(?:below|under|less than|<)\s*\$?\s*(\d[\d,]*(?:\.\d{1,2})?)", text, _re.I
+    )
+    target = 0.0
+    if below:
+        try:
+            target = float(below.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    product = _re.sub(
+        r"\b(?:monitor|watch|track|alert|notify|when|below|under|less than|price|for me|me)\b",
+        "", text, flags=_re.I,
+    )
+    product = _re.sub(r"\$[\d,]+(?:\.\d{1,2})?", "", product).strip().strip("., ") or text.strip()
+    return product, target
 
 
 def _stub_provider_name() -> tuple[str, str]:

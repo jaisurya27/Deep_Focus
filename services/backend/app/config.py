@@ -39,6 +39,7 @@ class Settings:
     backend_host: str
     backend_port: int
     session_db_path: str | None
+    agentverse_bridge_url: str
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -68,6 +69,7 @@ def get_settings() -> Settings:
         backend_host=_env("BACKEND_HOST", "127.0.0.1") or "127.0.0.1",
         backend_port=int(_env("BACKEND_PORT", "8765") or "8765"),
         session_db_path=_env("SESSION_DB_PATH"),
+        agentverse_bridge_url=_env("AGENTVERSE_BRIDGE_URL", "http://127.0.0.1:8020") or "http://127.0.0.1:8020",
     )
 
 
