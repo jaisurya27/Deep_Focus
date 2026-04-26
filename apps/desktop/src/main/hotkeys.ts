@@ -49,15 +49,14 @@ export function registerHotkeys() {
     // "tell Chrome to activate" + Cmd+C fights the existing key window and
     // the clipboard doesn't change on subsequent presses.
     //
-    // We use only 50 ms (down from 200 ms) because the AppleScript also
-    // explicitly activates the target app. showPanel() below restores the
-    // window immediately with new content, so the panel is gone for at most
-    // 50 ms — barely perceptible and far less jarring than the old 200 ms.
+    // 120 ms: short enough to feel instant, long enough for macOS to hand
+    // the key window to Chrome after hide() (50 ms was flaky after the user
+    // had interacted with the Glance window).
     const panel = getPanelWindow();
     const wasVisible = !!(panel && panel.isVisible());
     if (wasVisible) {
       panel!.hide();
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 120));
     }
 
     const [selection, windowContext] = await Promise.all([

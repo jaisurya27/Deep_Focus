@@ -150,7 +150,17 @@ export function GlanceShell() {
       }
       if (shouldExpand) {
         setExpanded(true);
-        requestAnimationFrame(() => inputRef.current?.focus());
+        // Hotkey-driven text selection: do NOT auto-focus the composer. Focusing
+        // the textarea makes Glance the macOS key window; the next Cmd+Ctrl+J
+        // copy-hop then fails with "clipboard unchanged" until the user
+        // manually clicks back into Chrome. The user can click the composer
+        // when they want to type. Other modes (just-ask, region, notices)
+        // still auto-focus.
+        const skipComposerFocus =
+          payload.mode === "selection" && payload.explicit;
+        if (!skipComposerFocus) {
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }
       }
     });
     return () => {
